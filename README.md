@@ -209,4 +209,4 @@ Sample pipeline runs do not call a fetch API or an LLM.
 
 ## License
 
-No license file is attached yet. All rights reserved unless the repository owner adds one.
+No license file is attached yet. All rights reserved to me i guess idk.

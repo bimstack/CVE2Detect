@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CVE2Detect — Threat Intel to Sigma</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect fill='%090b08' width='32' height='32'/><text x='6' y='24' font-family='sans-serif' font-size='18' font-weight='700' fill='%23e6b325'>C</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <aside class="rail" id="rail">
+    <div class="rail-head">
+      <span class="kicker">Discovery feed</span>
+      <button type="button" class="ghost" id="btn-discover" title="Search the last 24 hours">Scan 24h</button>
+    </div>
+    <p class="rail-note">CVE write-ups and incident reports from the last 24 hours. Select an item, then run the pipeline.</p>
+    <div class="feed" id="feed">
+      <div class="empty-inline">No results yet. Run Scan 24h or paste an advisory URL.</div>
+    </div>
+  </aside>
+
+  <div class="workspace">
+    <header class="top">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="1" y="1" width="46" height="46" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M10 12h18L10 36h18" fill="none" stroke="currentColor" stroke-width="4"/>
+          <circle cx="36" cy="14" r="4" fill="currentColor"/>
+        </svg>
+        <div>
+          <h1>CVE2Detect</h1>
+          <p>Threat intelligence → Sigma detection pipeline</p>
+        </div>
+      </div>
+      <div class="top-meta">
+        <div class="key-pills" id="key-pills"></div>
+        <div class="clock" id="clock"></div>
+        <nav class="view-switch" aria-label="Views">
+          <button type="button" class="on" data-view="pipeline">Pipeline</button>
+          <button type="button" data-view="archive">Archive</button>
+          <button type="button" data-view="estate">Environment</button>
+        </nav>
+      </div>
+    </header>
+
+    <section class="stages" id="stages" aria-label="Pipeline stages">
+      <div class="stage" data-stage="ingest">
+        <span class="stage-num">01</span>
+        <span class="stage-name">Ingest</span>
+        <span class="stage-desc">Fetch the advisory</span>
+      </div>
+      <div class="stage" data-stage="extract">
+        <span class="stage-num">02</span>
+        <span class="stage-name">Extract</span>
+        <span class="stage-desc">Telemetry and ATT&amp;CK</span>
+      </div>
+      <div class="stage" data-stage="validate">
+        <span class="stage-num">03</span>
+        <span class="stage-name">Validate</span>
+        <span class="stage-desc">Sigma and SIEM queries</span>
+      </div>
+      <div class="stage" data-stage="store">
+        <span class="stage-num">04</span>
+        <span class="stage-name">Output</span>
+        <span class="stage-desc">Copy queries — not stored on the server</span>
+      </div>
+    </section>
+
+    <section class="composer" id="pipeline-view">
+      <form id="run-form" class="run-form">
+        <label class="url-label" for="url">Advisory URL</label>
+        <input id="url" name="url" type="url" placeholder="https://research.example.com/cve-writeup" spellcheck="false" />
+        <button type="submit" class="primary" id="btn-run">Run pipeline</button>
+        <button type="button" class="ghost" id="btn-sample">Load sample</button>
+      </form>
+      <p class="status-line" id="status-line">Paste an advisory URL, pick a feed item, or load the sample rule.</p>
+      <p class="rail-note">Generated detections are experimental until you hunt and test them. Copy queries into your own tools — this service does not connect to a SIEM or store your runs.</p>
+    </section>
+
+    <section class="split" id="split">
+      <article class="col intel" id="intel-col">
+        <header class="col-head">
+          <span class="kicker">Threat intelligence</span>
+          <span class="stamps">
+            <span class="stamp" id="match-stamp"></span>
+            <span class="stamp" id="confidence-stamp"></span>
+          </span>
+        </header>
+        <div id="intel-body" class="col-body">
+          <div class="empty">
+            <strong>No advisory loaded</strong>
+            <span>Optional: set your stack under Environment. Run the pipeline to get CVE, ATT&amp;CK, host telemetry, Sigma, and SIEM queries. Copy them into your own tools — CVE2Detect does not connect to your SIEM.</span>
+          </div>
+        </div>
+      </article>
+      <article class="col sigma" id="sigma-col">
+        <header class="col-head">
+          <span class="kicker">Detection output</span>
+          <span class="stamp" id="valid-stamp"></span>
+        </header>
+        <div class="tabs" id="tabs" role="tablist">
+          <button type="button" class="on" data-tab="yaml">Sigma</button>
+          <button type="button" data-tab="splunk">Splunk</button>
+          <button type="button" data-tab="elastic">Elastic</button>
+          <button type="button" data-tab="kql">Sentinel</button>
+          <button type="button" data-tab="wazuh">Wazuh</button>
+          <button type="button" data-tab="lc">LimaCharlie</button>
+          <button type="button" data-tab="hunt">Retro-hunt</button>
+          <button type="button" data-tab="atomic">Atomic test</button>
+        </div>
+        <div class="code-toolbar">
+          <button type="button" class="ghost tiny" id="btn-copy">Copy</button>
+          <button type="button" class="ghost tiny" id="btn-download">Download .yml</button>
+        </div>
+        <p class="tab-hint" id="tab-hint">Generic Sigma YAML. Converted queries are on the other tabs.</p>
+        <pre class="code" id="code-view"><code>Sigma YAML and SIEM queries appear here after a run.</code></pre>
+      </article>
+    </section>
+
+    <section class="archive hidden" id="archive-view">
+      <div class="archive-bar">
+        <div>
+          <span class="kicker">This browser</span>
+          <h2>Runs from this session</h2>
+        </div>
+        <label class="toggle"><input type="checkbox" id="matches-only" /> Stack matches only</label>
+        <input id="archive-q" type="search" placeholder="Search CVE, T1059, sysmon…" />
+      </div>
+      <div class="archive-list" id="archive-list"></div>
+    </section>
+
+    <section class="archive hidden" id="estate-view">
+      <div class="archive-bar">
+        <div>
+          <span class="kicker">Environment profile</span>
+          <h2>Assets in scope</h2>
+        </div>
+        <button type="button" class="primary" id="btn-save-estate">Save profile</button>
+      </div>
+      <p class="estate-lead">Select products you monitor. Matching stays in this browser only. Advisories that do not match are tagged out of scope. CVE2Detect never connects to your SIEM or chat tools — copy the queries out.</p>
+      <div class="asset-grid" id="asset-grid"></div>
+      <div class="estate-grid">
+        <div>
+          <div class="block-title">Hunt window</div>
+          <label>Look-back for retro-hunt queries
+            <select id="hunt-days">
+              <option value="30">30 days</option>
+              <option value="60">60 days</option>
+              <option value="90" selected>90 days</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

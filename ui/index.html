@@ -76,8 +76,9 @@
         <input id="url" name="url" type="url" placeholder="https://research.example.com/cve-writeup" spellcheck="false" />
         <button type="submit" class="primary" id="btn-run">Run pipeline</button>
         <button type="button" class="ghost" id="btn-sample">Load sample</button>
+        <textarea id="markdown" name="markdown" rows="3" placeholder="Or paste advisory Markdown (skips live fetch)"></textarea>
       </form>
-      <p class="status-line" id="status-line">Paste an advisory URL, pick a feed item, or load the sample rule.</p>
+      <p class="status-line" id="status-line">Paste an advisory URL or Markdown, pick a feed item, or load the sample rule.</p>
       <p class="rail-note">Generated detections are experimental until you hunt and test them. Copy queries into your own tools — this service does not connect to a SIEM or store your runs.</p>
     </section>
 

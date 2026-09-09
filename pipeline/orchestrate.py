@@ -149,7 +149,7 @@ def run_pipeline(
                 yield note
             yield _event(
                 "ingest",
-                f"Retrieved {len(advisory.markdown)} chars via TinyFish {advisory.method}.",
+                f"Retrieved {len(advisory.markdown)} chars via {advisory.method}.",
                 title=advisory.title,
                 method=advisory.method,
                 latency_ms=advisory.latency_ms,

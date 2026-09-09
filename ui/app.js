@@ -68,7 +68,9 @@ async function loadHealth() {
   const data = await res.json();
   const host = $("key-pills");
   host.innerHTML = "";
-  host.append(pill("TinyFish", data.keys.tinyfish), pill("Gemini", data.keys.gemini));
+  const fetchOk = data.keys && (data.keys.fetch ?? data.keys.tinyfish);
+  const llmOk = data.keys && (data.keys.llm ?? data.keys.gemini);
+  host.append(pill("Fetch", !!fetchOk), pill("LLM", !!llmOk));
 }
 
 function setStatus(msg) {
@@ -274,7 +276,7 @@ function normalizeUrl(raw) {
   return candidate.replace(/^<|>$/g, "").replace(/[).,;>\]]+$/g, "");
 }
 
-async function runPipeline({ url = "", useSample = false } = {}) {
+async function runPipeline({ url = "", useSample = false, markdown = "" } = {}) {
   if (state.running) return;
   state.running = true;
   $("btn-run").disabled = true;
@@ -289,6 +291,7 @@ async function runPipeline({ url = "", useSample = false } = {}) {
       body: JSON.stringify({
         url,
         use_sample: useSample,
+        markdown,
         assets: readProfile().assets || [],
         hunt_days: Number(readProfile().hunt_days || 90),
       }),
@@ -413,9 +416,10 @@ async function discover() {
 
 $("run-form").addEventListener("submit", (ev) => {
   ev.preventDefault();
+  const markdown = ($("markdown") && $("markdown").value) || "";
   const cleaned = normalizeUrl($("url").value);
   $("url").value = cleaned;
-  runPipeline({ url: cleaned });
+  runPipeline({ url: cleaned, markdown });
 });
 $("btn-sample").addEventListener("click", () => runPipeline({ useSample: true }));
 $("btn-discover").addEventListener("click", discover);

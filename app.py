@@ -23,6 +23,11 @@ load_dotenv(ROOT / ".env")
 from pipeline.ingest import DEFAULT_QUERIES, discover  # noqa: E402
 from pipeline.orchestrate import run_pipeline  # noqa: E402
 from pipeline.profile import ASSET_CATALOG  # noqa: E402
+from pipeline.settings import (  # noqa: E402
+    llm_model,
+    provider_status,
+    search_ready,
+)
 from pipeline.store import init_db, list_feed, upsert_feed  # noqa: E402
 
 UI_DIR = ROOT / "ui"
@@ -85,22 +90,27 @@ def _rate_limit(request: Request, bucket: str, max_n: int, window_s: float) -> N
 
 
 def _keys() -> dict[str, bool]:
-    load_dotenv(ROOT / ".env", override=True)
+    status = provider_status()
     return {
-        "tinyfish": bool(os.environ.get("TINYFISH_API_KEY", "").strip()),
-        "gemini": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
+        "fetch": bool(status["fetch_ready"]),
+        "llm": bool(status["llm_ready"]),
     }
 
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     load_dotenv(ROOT / ".env", override=True)
+    status = provider_status()
     return {
         "ok": True,
         "service": "cve2detect",
         "mode": "public",
         "keys": _keys(),
-        "model": os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+        "providers": {
+            "fetch": status["fetch"],
+            "llm": status["llm"],
+        },
+        "model": llm_model(),
         "daily_search": os.environ.get("CVE2DETECT_DAILY_SEARCH", "0") == "1",
         "persist_jobs": False,
     }
@@ -114,10 +124,13 @@ def feed(limit: int = Query(80, ge=1, le=200)) -> dict[str, Any]:
 @app.post("/api/discover")
 def api_discover(request: Request, body: DiscoverRequest) -> dict[str, Any]:
     _rate_limit(request, "discover", max_n=6, window_s=600)
-    if not _keys()["tinyfish"]:
+    if not search_ready():
         raise HTTPException(
             status_code=400,
-            detail="TINYFISH_API_KEY is missing. Discovery uses the TinyFish Search API.",
+            detail=(
+                "Scan 24h needs a search-capable fetch provider and FETCH_API_KEY. "
+                "Set CVE2DETECT_FETCH_PROVIDER=tinyfish, or paste a URL / Markdown instead."
+            ),
         )
     queries = body.queries or DEFAULT_QUERIES
     try:
@@ -194,7 +207,7 @@ app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 def _start_scheduler() -> None:
     if os.environ.get("CVE2DETECT_DAILY_SEARCH", "0") != "1":
         return
-    if not _keys()["tinyfish"]:
+    if not search_ready():
         return
     try:
         from apscheduler.schedulers.background import BackgroundScheduler

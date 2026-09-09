@@ -1,6 +1,6 @@
 """SQLite persistence.
 
-Public v1 uses this module for the shared TinyFish discovery feed only.
+Public v1 uses this module for the shared discovery feed only.
 Job records, estate profiles, and SIEM credentials are not written by the
 HTTP layer; `save_record` / `save_profile` remain for tests and local forks.
 """

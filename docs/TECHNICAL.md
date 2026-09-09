@@ -10,10 +10,10 @@ Public v1 is a **generate-and-copy** service:
 - The UI archive is `sessionStorage` in the caller's tab (max 40 records).
 - The environment profile is `localStorage` (`cve2detect.profile`). Asset IDs are sent only on `POST /api/pipeline`.
 - There is no SIEM deploy API and no webhook API. Do not store SIEM credentials on a public host.
-- SQLite holds the **shared TinyFish discovery feed** only.
+- SQLite holds the **shared discovery feed** only.
 - Generated Sigma always uses `status: experimental`.
 
-It is a detection-engineering assistant, not a scanner, exploit framework, or production SIEM. Every live URL run sends page text to TinyFish and the extracted Markdown to Gemini.
+It is a detection-engineering assistant, not a scanner, exploit framework, or production SIEM. Live URL runs send page text to the **configured fetch provider** (or only to the target site if `http`). Extraction sends Markdown to the **configured LLM**.
 
 ## Four stages
 
@@ -21,10 +21,10 @@ It is a detection-engineering assistant, not a scanner, exploit framework, or pr
 URL or Search hit
         │
         ▼
-[1 Ingest]  TinyFish Search → Fetch (markdown) → stealth Agent on bot_blocked
+[1 Ingest]  Fetch provider (http GET, or search/render API) / pasted Markdown
         │  clean Markdown
         ▼
-[2 Extract] Gemini structured JSON (IntelExtraction schema)
+[2 Extract] Configured LLM structured JSON (IntelExtraction schema)
         │  telemetry + Sigma field draft
         ▼
 [3 Validate] assemble YAML → yaml.safe_load → SigmaRule.from_yaml → backends
@@ -37,8 +37,8 @@ URL or Search hit
 
 | Stage | Module | External dependency |
 |---|---|---|
-| 1 Ingest | `pipeline/ingest.py` | TinyFish Search `GET https://api.search.tinyfish.ai`, Fetch `POST https://api.fetch.tinyfish.ai`, Agent `POST https://agent.tinyfish.ai/v1/automation/run` |
-| 2 Extract | `pipeline/extract.py`, `pipeline/schema.py` | Gemini `generativelanguage.googleapis.com` (`gemini-3.8-flash` default) |
+| 1 Ingest | `pipeline/ingest.py`, `pipeline/settings.py` | `http` GET, or a TinyFish-shaped Search/Fetch/Agent API (`FETCH_*` URLs override hosts) |
+| 2 Extract | `pipeline/extract.py`, `pipeline/schema.py`, `pipeline/settings.py` | Gemini `generateContent`, or OpenAI-compatible `POST {LLM_API_BASE}/chat/completions` |
 | 3 Validate | `pipeline/sigma_build.py`, `pipeline/validate.py`, `pipeline/ossiem.py`, `pipeline/atomic.py`, `pipeline/hunt.py` | pySigma + Splunk / Elastic / Kusto backends |
 | 4 Output / UI | `pipeline/orchestrate.py`, `app.py`, `ui/` | Record shaped in memory; SQLite used only for `feed` |
 
@@ -49,9 +49,10 @@ Orchestration lives in `pipeline/orchestrate.py`. The HTTP layer streams progres
 | Path | Role |
 |---|---|
 | `app.py` | FastAPI app, SSE pipeline, rate limits, optional 24h feed scheduler |
-| `pipeline/ingest.py` | URL normalize, TinyFish search/fetch, stealth fallback |
+| `pipeline/settings.py` | Fetch / LLM provider resolution from env |
+| `pipeline/ingest.py` | URL normalize, pluggable fetch, HTTP fallback, optional search |
 | `pipeline/schema.py` | Pydantic `IntelExtraction` + strict JSON Schema helper |
-| `pipeline/extract.py` | Gemini `generateContent` with JSON schema |
+| `pipeline/extract.py` | Pluggable LLM (`gemini` or OpenAI-compatible) with JSON schema |
 | `pipeline/sigma_build.py` | Deterministic YAML from structured fields (`status: experimental`) |
 | `pipeline/validate.py` | YAML + pySigma parse + transpile |
 | `pipeline/ossiem.py` | Wazuh XML and LimaCharlie D&R from Sigma selections |
@@ -64,7 +65,7 @@ Orchestration lives in `pipeline/orchestrate.py`. The HTTP layer streams progres
 | `pipeline/webhooks.py` | Unused in public v1 (not imported by `app.py`) |
 | `ui/` | Static console (`index.html`, `styles.css`, `app.js`) |
 | `samples/advisory.md` | Bundled IIS RCE write-up |
-| `samples/extraction.json` | Fixture extraction used when sample + no `GEMINI_API_KEY` |
+| `samples/extraction.json` | Fixture extraction used when `use_sample=true` |
 | `data/cve2detect.db` | Shared discovery feed (gitignored) |
 | `tests/` | Schema, YAML, pySigma, store unit tests, public HTTP surface |
 
@@ -76,9 +77,9 @@ Base URL: `http://127.0.0.1:8787` (override with `CVE2DETECT_HOST` / `CVE2DETECT
 |---|---|---|
 | GET | `/` | Dashboard |
 | GET | `/static/*` | UI assets |
-| GET | `/api/health` | `{ ok, service, mode: "public", persist_jobs: false, keys.{tinyfish,gemini}, model, daily_search }` — re-reads `.env` |
-| GET | `/api/feed` | TinyFish discovery hits (no `processed` flag) |
-| POST | `/api/discover` | `{ queries?, recency_minutes? }` → upsert feed. Needs TinyFish key. **6 / 10 min / IP** |
+| GET | `/api/health` | `{ ok, service, mode: "public", persist_jobs: false, keys.{fetch,llm}, providers, model, daily_search }` — re-reads `.env` |
+| GET | `/api/feed` | Discovery hits (no `processed` flag) |
+| POST | `/api/discover` | `{ queries?, recency_minutes? }` → upsert feed. Needs a search-capable fetch provider. **6 / 10 min / IP** |
 | GET | `/api/estate/catalog` | Asset id/label list for the Environment checkboxes |
 | POST | `/api/pipeline` | `{ url, use_sample, markdown, title, assets[], hunt_days }`. Default **SSE**. `?stream=false` returns the final event as JSON. **8 / 10 min / IP** |
 
@@ -132,14 +133,15 @@ Detection tabs: `yaml`, `splunk`, `elastic`, `kql`, `wazuh`, `lc`, `hunt`, `atom
 
 `normalize_advisory_url()` accepts a bare URL, `<url>`, `[title](url)`, or a garbled markdown paste (`url](url`). The first `https://` token is kept; junk after `](` is dropped.
 
-Fetch request:
+If `CVE2DETECT_FETCH_PROVIDER=http` (or no fetch key), ingest GETs the URL with httpx and converts HTML to Markdown. JavaScript-heavy pages may be empty — paste Markdown or use a JS-capable fetch API.
+
+A search/render provider (`tinyfish` contract, hosts overridable via `FETCH_*_URL`) posts:
 
 - `format: markdown`, `ttl: 0` (live), `per_url_timeout_ms: 90000`
 - `exclude_selectors`: cookie banners, nav, footer, ads, comments
 - `include_selectors`: `article`, `main`, `.post-content`, `.entry-content`, …
-- `purpose` string for TinyFish ranking/extraction quality
 
-If `selector_not_matched`, retry without include selectors. If `bot_blocked`, POST Agent with `browser_profile: stealth`, Tetra US proxy, and an output schema `{ title, markdown }`. Agent draws wallet credits; Search and Fetch do not.
+If `selector_not_matched`, retry without include selectors. If `bot_blocked`, POST Agent with `browser_profile: stealth` and output schema `{ title, markdown }`.
 
 Discovery queries (default, 1440 minute recency, social domains excluded):
 
@@ -154,13 +156,16 @@ Hits land in `feed` (deduped by URL). `CVE2DETECT_DAILY_SEARCH=1` starts APSched
 
 System prompt: Senior Threat Analyst / Detection Engineer. Grounding rules: no invented hashes/CVEs/event IDs; prefer OS telemetry over hashes; Sigma field names (`Image`, `CommandLine`, `ParentImage`, …).
 
-Client: REST `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` with header `x-goog-api-key`. Default model `GEMINI_MODEL` or `gemini-3.8-flash`.
+LLM routing (`pipeline/settings.py`):
 
-`make_strict_schema(IntelExtraction)` forces `additionalProperties: false` and `required = all properties`. The schema is sent as `generationConfig.responseJsonSchema` (falls back to `responseSchema` on HTTP 400).
+- `gemini` — `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` with `x-goog-api-key`. Schema via `responseJsonSchema` (falls back to `responseSchema` on HTTP 400).
+- `openai` / `openai_compatible` — `POST {LLM_API_BASE}/chat/completions` with `Authorization: Bearer`. Prefers `response_format.json_schema` (strict); falls back to `json_object` on HTTP 400.
+
+`make_strict_schema(IntelExtraction)` forces `additionalProperties: false` and `required = all properties`.
 
 Markdown is truncated at 80,000 characters.
 
-If `use_sample=true`, `samples/extraction.json` is loaded instead of calling Gemini (so CI and Load sample stay deterministic).
+If `use_sample=true`, `samples/extraction.json` is loaded instead of calling an LLM (so CI and Load sample stay deterministic).
 
 Top-level extraction fields: `summary`, `cve`, `cvss`, `vulnerability_type`, `threat_actor`, `campaign`, `affected[]`, `techniques[]`, `telemetry[]`, `process_anomalies[]`, `command_lines[]`, `paths[]`, `indicators[]`, nested `sigma` draft, `confidence`, `is_actionable`, `caveats`.
 
@@ -209,13 +214,17 @@ Sliding window in process memory (`deque` of timestamps), keyed by client IP + b
 
 ## Environment
 
-Loaded from `.env` at process start and **re-read** on health checks, TinyFish calls, and Gemini calls (`load_dotenv(..., override=True)`).
+Loaded from `.env` at process start and **re-read** on health checks and provider calls (`load_dotenv(..., override=True)`).
 
 | Variable | Purpose |
 |---|---|
-| `TINYFISH_API_KEY` | Search, Fetch, stealth Agent |
-| `GEMINI_API_KEY` | Stage 2 (Google AI Studio key from aistudio.google.com/apikey) |
-| `GEMINI_MODEL` | Default `gemini-3.8-flash` |
+| `CVE2DETECT_FETCH_PROVIDER` | `http` or `tinyfish` (auto: `tinyfish` if a fetch key exists, else `http`) |
+| `FETCH_API_KEY` | Search/render fetch API. Alias: `TINYFISH_API_KEY` |
+| `FETCH_SEARCH_URL` / `FETCH_URL` / `FETCH_AGENT_URL` | Override TinyFish-shaped hosts |
+| `CVE2DETECT_LLM_PROVIDER` | `gemini`, `openai`, or `openai_compatible` (auto-detected from keys / base URL) |
+| `LLM_API_KEY` | LLM slot. Aliases: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY` |
+| `LLM_MODEL` | Model id. Aliases: `GEMINI_MODEL`, `OPENAI_MODEL` |
+| `LLM_API_BASE` | OpenAI-compatible base URL. Alias: `OPENAI_BASE_URL` |
 | `CVE2DETECT_HOST` / `CVE2DETECT_PORT` | Bind, default `127.0.0.1:8787` |
 | `CVE2DETECT_DAILY_SEARCH` | `1` enables 24h discovery job |
 | `CVE2DETECT_SEARCH_RECENCY_MINUTES` | Default `1440` |
@@ -240,7 +249,7 @@ pytest -q
 
 Coverage: URL sanitizer, extraction schema, Sigma YAML + pySigma parse of the sample (`status: experimental`), store/FTS unit tests, public HTTP surface (`mode=public`, `persist_jobs=false`, sample pipeline, 404 on records/estate/deploy/webhooks).
 
-Live TinyFish/Gemini calls are not in CI. Sample pipeline does not call Gemini.
+Live fetch/LLM calls are not in CI. Sample pipeline does not call an LLM.
 
 ## Limitations
 
@@ -257,7 +266,7 @@ Live TinyFish/Gemini calls are not in CI. Sample pipeline does not call Gemini.
 - API keys stay server-side
 - No SIEM credentials collected or stored
 - No shared job archive
-- Fetch rejects the need for custom scrapers; TinyFish is the only HTTP client to third-party sites
-- Sample path does not call TinyFish or Gemini
+- Third-party page retrieval goes through the configured fetch provider (or a single httpx GET when `http`)
+- Sample path does not call a fetch API or an LLM
 - Generated Sigma `status` is always `experimental`
 - Atomic tests rewrite live C2 to documentation ranges

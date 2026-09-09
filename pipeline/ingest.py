@@ -1,4 +1,4 @@
-"""Stage 1 — TinyFish search discovery and stealth fetch to clean Markdown."""
+"""Stage 1 — fetch an advisory to Markdown (pluggable fetch provider)."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
-from dotenv import load_dotenv
+
+from pipeline.settings import fetch_api_key, fetch_provider, search_ready
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -105,17 +107,29 @@ class FetchedAdvisory:
 
 
 def _api_key() -> str:
-    load_dotenv(ROOT / ".env", override=True)
-    key = os.environ.get("TINYFISH_API_KEY", "").strip()
+    key = fetch_api_key()
     if not key:
         raise IngestError(
-            "TINYFISH_API_KEY is not set. Add it to .env (https://agent.tinyfish.ai/api-keys)."
+            "FETCH_API_KEY is not set. Add it to .env, or set "
+            "CVE2DETECT_FETCH_PROVIDER=http to GET the URL directly."
         )
     return key
 
 
 def _headers() -> dict[str, str]:
     return {"X-API-Key": _api_key(), "Content-Type": "application/json"}
+
+
+def _search_url() -> str:
+    return os.environ.get("FETCH_SEARCH_URL", SEARCH_URL).strip() or SEARCH_URL
+
+
+def _fetch_url() -> str:
+    return os.environ.get("FETCH_URL", FETCH_URL).strip() or FETCH_URL
+
+
+def _agent_url() -> str:
+    return os.environ.get("FETCH_AGENT_URL", AGENT_RUN_URL).strip() or AGENT_RUN_URL
 
 
 def _site_name(url: str) -> str:
@@ -152,7 +166,12 @@ def discover(
     recency_minutes: int | None = None,
     progress: ProgressFn | None = None,
 ) -> list[SearchHit]:
-    """Run TinyFish Search queries and return deduplicated hits."""
+    """Run search queries and return deduplicated hits. Requires a search-capable fetch provider."""
+    if not search_ready():
+        raise IngestError(
+            "Scan 24h needs a search-capable fetch provider and FETCH_API_KEY. "
+            "Set CVE2DETECT_FETCH_PROVIDER=tinyfish, or paste an advisory URL / Markdown instead."
+        )
     queries = queries or DEFAULT_QUERIES
     recency = recency_minutes
     if recency is None:
@@ -162,7 +181,7 @@ def discover(
     with httpx.Client(timeout=45.0) as client:
         for query in queries:
             if progress:
-                progress("ingest", f"Searching TinyFish: {query}")
+                progress("ingest", f"Searching: {query}")
             params: dict[str, Any] = {
                 "query": query,
                 "location": "US",
@@ -174,11 +193,11 @@ def discover(
                     "and technical incident reports for detection engineering."
                 ),
             }
-            response = client.get(SEARCH_URL, params=params, headers=_headers())
+            response = client.get(_search_url(), params=params, headers=_headers())
             if response.status_code == 401:
-                raise IngestError("TinyFish rejected the API key (401).")
+                raise IngestError("Fetch API rejected the key (401).")
             if response.status_code == 429:
-                raise IngestError("TinyFish Search rate limit exceeded (429). Retry shortly.")
+                raise IngestError("Search rate limit exceeded (429). Retry shortly.")
             response.raise_for_status()
             payload = response.json()
             for item in payload.get("results") or []:
@@ -224,11 +243,11 @@ def _fetch_once(
     }
     if include_selectors:
         body["include_selectors"] = include_selectors
-    response = client.post(FETCH_URL, headers=_headers(), json=body)
+    response = client.post(_fetch_url(), headers=_headers(), json=body)
     if response.status_code == 401:
-        raise IngestError("TinyFish rejected the API key (401).")
+        raise IngestError("Fetch API rejected the key (401).")
     if response.status_code == 429:
-        raise IngestError("TinyFish Fetch rate limit exceeded (429). Retry shortly.")
+        raise IngestError("Fetch rate limit exceeded (429). Retry shortly.")
     response.raise_for_status()
     payload = response.json()
     results = payload.get("results") or []
@@ -242,7 +261,7 @@ def _agent_stealth_fetch(url: str, progress: ProgressFn | None) -> FetchedAdviso
     if progress:
         progress(
             "ingest",
-            "Fetch hit anti-bot. Escalating to TinyFish Agent stealth browser.",
+            "Fetch hit anti-bot. Escalating to stealth browser.",
         )
     body = {
         "url": url,
@@ -260,16 +279,16 @@ def _agent_stealth_fetch(url: str, progress: ProgressFn | None) -> FetchedAdviso
         "agent_config": {"max_duration_seconds": 180},
     }
     with httpx.Client(timeout=200.0) as client:
-        response = client.post(AGENT_RUN_URL, headers=_headers(), json=body)
+        response = client.post(_agent_url(), headers=_headers(), json=body)
         if response.status_code in (401, 403):
             raise IngestError(
-                "Stealth Agent run was rejected. Fetch was bot-blocked and Agent "
-                "access/credits are required for Cloudflare/PerimeterX targets."
+                "Stealth fetch was rejected. The page is bot-blocked; add stealth "
+                "credits for this fetch provider, use HTTP on a static URL, or paste Markdown."
             )
         if response.status_code == 402:
             raise IngestError(
-                "TinyFish Agent requires wallet credits. Fetch was blocked by anti-bot; "
-                "add Agent credits or paste a less-protected URL."
+                "Stealth fetch requires credits. The page is bot-blocked; "
+                "add credits, switch CVE2DETECT_FETCH_PROVIDER=http, or paste Markdown."
             )
         response.raise_for_status()
         payload = response.json()
@@ -306,20 +325,85 @@ def _agent_stealth_fetch(url: str, progress: ProgressFn | None) -> FetchedAdviso
     )
 
 
+_SCRIPT_RE = re.compile(r"(?is)<(script|style|nav|footer|noscript|svg)[^>]*>.*?</\1>")
+_BR_RE = re.compile(r"(?is)<br\s*/?>")
+_BLOCK_RE = re.compile(r"(?is)</(p|div|h[1-6]|li|tr|section|article)>")
+_HEADING_RE = re.compile(r"(?is)<h([1-6])[^>]*>")
+_TAG_RE = re.compile(r"(?is)<[^>]+>")
+_TITLE_RE = re.compile(r"(?is)<title[^>]*>(.*?)</title>")
+_WS_RE = re.compile(r"\n{3,}")
+
+
+def html_to_markdown(html: str) -> str:
+    """Best-effort HTML → Markdown for the direct HTTP fetch provider."""
+    text = _SCRIPT_RE.sub(" ", html or "")
+    text = _BR_RE.sub("\n", text)
+    text = _HEADING_RE.sub(lambda m: "\n" + ("#" * int(m.group(1))) + " ", text)
+    text = _BLOCK_RE.sub("\n\n", text)
+    text = _TAG_RE.sub(" ", text)
+    text = unescape(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = _WS_RE.sub("\n\n", text)
+    return text.strip()
+
+
+def _http_fetch(url: str, progress: ProgressFn | None) -> FetchedAdvisory:
+    if progress:
+        progress("ingest", "Fetching URL over HTTP (no JavaScript render).")
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (compatible; CVE2Detect/1.0; +https://github.com/bimstack/CVE2Detect)"
+        ),
+        "Accept": "text/html,application/xhtml+xml,text/markdown,text/plain;q=0.9,*/*;q=0.8",
+    }
+    try:
+        with httpx.Client(timeout=45.0, follow_redirects=True) as client:
+            response = client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        raise IngestError(f"HTTP fetch failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise IngestError(f"HTTP fetch returned {response.status_code} for {url}")
+    ctype = (response.headers.get("content-type") or "").lower()
+    raw = response.text[:2_000_000]
+    title = url
+    if "html" in ctype or "<html" in raw[:400].lower():
+        found = _TITLE_RE.search(raw)
+        if found:
+            title = unescape(_TAG_RE.sub("", found.group(1))).strip() or url
+        markdown = html_to_markdown(raw)
+    else:
+        markdown = raw.strip()
+    if not markdown:
+        raise IngestError(
+            "HTTP fetch returned empty text. Use a JS-capable fetch provider "
+            "or paste the advisory Markdown."
+        )
+    return FetchedAdvisory(
+        url=url,
+        final_url=str(response.url) or url,
+        title=title,
+        markdown=markdown,
+        method="http",
+        site_name=_site_name(str(response.url) or url),
+    )
+
+
 def fetch_advisory(url: str, progress: ProgressFn | None = None) -> FetchedAdvisory:
-    """Render a URL through TinyFish Fetch; escalate to stealth Agent on bot_blocked."""
+    """Fetch a URL to Markdown via the configured provider."""
     url = normalize_advisory_url(url)
+    if fetch_provider() == "http":
+        return _http_fetch(url, progress)
 
     notes: list[str] = []
     if progress:
-        progress("ingest", "Routing URL through TinyFish Fetch (JS render → Markdown).")
+        progress("ingest", "Routing URL through the fetch API (JS render → Markdown).")
 
     with httpx.Client(timeout=160.0) as client:
         page, err = _fetch_once(client, url, include_selectors=FETCH_INCLUDE_SELECTORS)
         if err and err.get("error") == "selector_not_matched":
             notes.append("article selectors missed; retrying full-page extraction")
             if progress:
-                progress("ingest", "Selectors missed. Retrying full-page TinyFish Fetch.")
+                progress("ingest", "Selectors missed. Retrying full-page fetch.")
             page, err = _fetch_once(client, url, include_selectors=None)
 
         if err and err.get("error") == "bot_blocked":
@@ -331,14 +415,14 @@ def fetch_advisory(url: str, progress: ProgressFn | None = None) -> FetchedAdvis
             code = err.get("error") or "fetch_failed"
             status = err.get("status")
             detail = f"{code}" + (f" (HTTP {status})" if status else "")
-            raise IngestError(f"TinyFish could not extract {url}: {detail}")
+            raise IngestError(f"Fetch API could not extract {url}: {detail}")
 
         if not page:
-            raise IngestError(f"TinyFish returned no content for {url}")
+            raise IngestError(f"Fetch API returned no content for {url}")
 
         markdown = _markdown_from_fetch_result(page).strip()
         if not markdown:
-            raise IngestError("TinyFish Fetch returned empty Markdown.")
+            raise IngestError("Fetch API returned empty Markdown.")
 
         latency = page.get("latency_ms")
         return FetchedAdvisory(

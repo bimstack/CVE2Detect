@@ -14,6 +14,11 @@ def test_health_and_pages():
     assert body["mode"] == "public"
     assert body["persist_jobs"] is False
     assert "keys" in body
+    assert "fetch" in body["keys"]
+    assert "llm" in body["keys"]
+    assert "providers" in body
+    assert "fetch" in body["providers"]
+    assert "llm" in body["providers"]
     home = client.get("/")
     assert home.status_code == 200
     assert b"CVE2Detect" in home.content

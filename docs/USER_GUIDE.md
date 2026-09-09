@@ -28,13 +28,13 @@ It does not enable alerts, does not deploy rules, and does not replace rule revi
    copy .env.example .env
    ```
 
-3. Put keys in `.env`:
-   - `TINYFISH_API_KEY` — fetch/search ([agent.tinyfish.ai/api-keys](https://agent.tinyfish.ai/api-keys))
-   - `GEMINI_API_KEY` — extraction ([aistudio.google.com/apikey](https://aistudio.google.com/apikey))
+3. Put **your** keys in `.env` (copy from `.env.example`):
+   - **Fetch** — `CVE2DETECT_FETCH_PROVIDER=http` (no key) or a search/render API via `FETCH_API_KEY`
+   - **LLM** — `LLM_API_KEY`, `LLM_MODEL`, and if needed `LLM_API_BASE` for any OpenAI-compatible endpoint
 4. `python app.py`
 5. Open [http://127.0.0.1:8787](http://127.0.0.1:8787)
 
-Header pills: **TinyFish live** / **Gemini live**. Missing means the matching `.env` line is empty — save and refresh.
+Header pills: **Fetch live** / **LLM live**. Missing means that slot is empty — save `.env` and refresh.
 
 The process binds to this machine only (`127.0.0.1`) unless you change `CVE2DETECT_HOST` for hosting behind a reverse proxy.
 
@@ -62,8 +62,9 @@ There are no webhook URLs and no SIEM credentials on this screen. Copy the query
 
 ### Pipeline
 
-1. **Scan 24h** — fill the shared discovery feed, click an item  
+1. **Scan 24h** — fill the shared discovery feed, click an item (needs a search-capable fetch provider)  
    **or** paste an **Advisory URL**  
+   **or** paste **advisory Markdown** (skips live fetch)  
    **or** **Load sample** (offline IIS RCE fixture)
 2. **Run pipeline** — stages: Ingest → Extract → Validate → Output
 
@@ -93,7 +94,7 @@ This is not a shared knowledge base. Each completed run is kept in `sessionStora
 
 ## Privacy
 
-Article text is sent to TinyFish (fetch) and Gemini (extract). Do not process classified or internal advisories unless policy allows those vendors to see the content.
+Article text is sent to **your configured fetch API** (or only to the target site if fetch is `http`) and Markdown is sent to **your configured LLM**. Do not process classified or internal advisories unless those providers are allowed to see the content.
 
 The server stores:
 
@@ -105,7 +106,7 @@ Your stack profile lives in this browser. Your run history lives in this tab.
 ## FAQ
 
 **Load sample vs live URL**  
-Sample does not need TinyFish. Live URLs need both keys.
+Sample needs neither API. Live URLs need an LLM key plus fetch (`http`, a fetch API, or pasted Markdown). Scan 24h needs a search-capable fetch provider.
 
 **404 on fetch**  
 Paste the browser address bar URL, not a Markdown link.

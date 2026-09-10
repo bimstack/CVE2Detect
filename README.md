@@ -33,7 +33,6 @@ Advisory URL, pasted Markdown, or 24h discovery hit
         │
         ▼
   2 Extract    LLM as a Senior Threat Analyst → structured JSON
-               (retry on 429/503, then the next id in LLM_MODELS)
         │
         ▼
   3 Validate   Assemble Sigma → pySigma parse → Splunk / Elastic / Sentinel

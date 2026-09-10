@@ -132,7 +132,7 @@ Rate limits (per client IP, 10-minute window): **8** pipeline runs, **6** discov
 | `CVE2DETECT_LLM_PROVIDER` | auto-detected | `gemini`, `openai`, or `openai_compatible` |
 | `LLM_API_KEY` | — | LLM key |
 | `LLM_MODEL` | provider default | Primary model id |
-| `LLM_MODELS` | Gemini: `gemini-2.5-flash,gemini-2.0-flash` | Comma-separated fallbacks after retries; `none` disables |
+| `LLM_MODELS` | — | Comma-separated fallbacks after retries; `none` disables |
 | `LLM_API_BASE` | provider default | OpenAI-compatible base URL |
 | `CVE2DETECT_HOST` / `CVE2DETECT_PORT` | `127.0.0.1` / `8787` | Bind |
 | `CVE2DETECT_DAILY_SEARCH` | `0` | `1` refreshes the discovery feed every 24 hours |

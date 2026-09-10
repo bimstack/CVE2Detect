@@ -4,7 +4,7 @@
 
 CVE2Detect is a FastAPI application that ingests public vulnerability write-ups and threat advisories and produces **generic Sigma rules** along with transpiled vendor queries (Splunk SPL, Elastic Query DSL, Microsoft Sentinel KQL, Wazuh XML, and LimaCharlie D&R).
 
-It serves as a detection engineering assistant to accelerate rule authoring and threat hunting. It is not an automated scanner, exploit framework, or direct SIEM manager.
+This project is a detection-engineering assistant for rule authoring and hunting. It is not a scanner, exploit framework, SIEM, or hosted product.
 
 ## Architecture & Design Principles
 
@@ -14,7 +14,7 @@ CVE2Detect is built around a lightweight, **generate-and-copy** architecture:
 - **Client-Side Session State:** Run history is maintained in the user's browser tab using `sessionStorage` (capped at 40 records). Monitored asset profiles reside in browser `localStorage` (`cve2detect.profile`) and are transmitted to the backend only as asset IDs during pipeline runs.
 - **Decoupled Security Model:** The project eliminates the need to store sensitive SIEM API credentials or webhook secrets on the server. Detections are generated, reviewed, and copied into the target security tools.
 - **Scoped Database Storage:** The local SQLite database (`data/cve2detect.db`) is used exclusively to cache the discovery feed (`feed` table).
-- **Conservative Rule Status:** Generated Sigma rules enforce `status: experimental` to mandate human review, false-positive tuning, and proactive hunting before production deployment.
+- **Conservative Rule Status:** Generated Sigma rules enforce `status: experimental` so a human reviews, hunts, and tunes them before enabling anything.
 
 ## Pipeline Architecture
 
@@ -26,6 +26,7 @@ Advisory URL, Search hit, or Markdown paste
         │    Output: Clean Markdown
         ▼
 [2 Extract]  Configured LLM with structured JSON schema (IntelExtraction)
+        │    Retry on 429/503, then next id in LLM_MODELS
         │    Output: Telemetry, ATT&CK mappings, and Sigma detection fields
         ▼
 [3 Validate] Assemble YAML → yaml.safe_load → pySigma parsing → backends
@@ -80,7 +81,7 @@ Base URL: `http://127.0.0.1:8787` (configured via `CVE2DETECT_HOST` and `CVE2DET
 |---|---|---|
 | GET | `/` | Web console interface |
 | GET | `/static/*` | Static CSS and JavaScript assets |
-| GET | `/api/health` | Service health and provider configuration status (`{ ok, service, mode, persist_jobs, keys, providers, model, daily_search }`) |
+| GET | `/api/health` | Health and provider status (`{ ok, project, mode: "project", persist_jobs, keys, providers, model, models, daily_search }`) |
 | GET | `/api/feed` | Cached discovery search hits from the local database |
 | POST | `/api/discover` | Trigger discovery search: `{ queries?, recency_minutes? }`. Requires a search-capable fetch provider (rate-limited: 6 requests / 10 min / IP) |
 | GET | `/api/estate/catalog` | Catalog of monitored asset identifiers and labels for the Environment view |
@@ -148,11 +149,13 @@ Detection tabs: `yaml` (Sigma), `splunk`, `elastic`, `kql`, `wazuh`, `lc` (LimaC
 - `make_strict_schema(IntelExtraction)` enforces `additionalProperties: false` across all objects and marks all schema fields as required.
 - Long write-ups are safely truncated at 80,000 characters before LLM submission.
 - When `use_sample=true`, the pipeline bypasses external LLM calls and loads `samples/extraction.json` for deterministic offline testing.
+- **Busy / high-demand handling:** Each model is tried up to twice with 2s then 4s backoff on HTTP 429, 503, 502, 504, 408, and transport timeouts. A 404 skips to the next model. 401/403 fail immediately (bad key). After the list is exhausted, extract raises `ExtractError` naming every model tried.
+- **Model list:** `LLM_MODEL` (or `GEMINI_MODEL`) is primary. `LLM_MODELS` is a comma-separated fallback list. If the provider is Gemini and `LLM_MODELS` is empty, defaults are `gemini-2.5-flash` then `gemini-2.0-flash`. Set `LLM_MODELS=none` to disable defaults.
 
 ### Stage 3 — Validate & Transpile
 
 - `build_sigma_yaml()` maps extracted detection blocks into formal Sigma structures, sanitizes identifiers, validates condition syntax, and generates ordered YAML.
-- **Rule Status:** The builder enforces `status: experimental` on all generated Sigma rules to ensure human review before operational deployment.
+- **Rule Status:** The builder enforces `status: experimental` on all generated Sigma rules.
 - **Validation Steps:**
   1. `yaml.safe_load` verification.
   2. Structural check for required keys (`title`, `logsource`, `detection.condition`, and at least one selection block).
@@ -200,26 +203,24 @@ The application loads settings from `.env` on startup and refreshes them dynamic
 | Variable | Default | Purpose |
 |---|---|---|
 | `CVE2DETECT_FETCH_PROVIDER` | auto | `http` or `tinyfish` (defaults to `tinyfish` if `FETCH_API_KEY` is present, else `http`) |
-| `FETCH_API_KEY` | None | API key for search and browser-render fetch services (alias: `TINYFISH_API_KEY`) |
+| `FETCH_API_KEY` | None | API key for search and browser-render fetch APIs (alias: `TINYFISH_API_KEY`) |
 | `FETCH_SEARCH_URL` / `FETCH_URL` / `FETCH_AGENT_URL` | None | Overrides for fetch provider API endpoints |
 | `CVE2DETECT_LLM_PROVIDER` | auto | `gemini`, `openai`, or `openai_compatible` (detected from keys and base URL) |
 | `LLM_API_KEY` | None | LLM API key (aliases: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`) |
-| `LLM_MODEL` | None | LLM model identifier (aliases: `GEMINI_MODEL`, `OPENAI_MODEL`) |
-| `LLM_API_BASE` | None | Base URL for OpenAI-compatible gateways (alias: `OPENAI_BASE_URL`) |
+| `LLM_MODEL` | provider default | Primary model id (aliases: `GEMINI_MODEL`, `OPENAI_MODEL`) |
+| `LLM_MODELS` | Gemini defaults `gemini-2.5-flash,gemini-2.0-flash` | Comma-separated fallbacks after retries; `none` disables defaults |
+| `LLM_API_BASE` | provider default | Base URL for OpenAI-compatible gateways (alias: `OPENAI_BASE_URL`) |
 | `CVE2DETECT_HOST` | `127.0.0.1` | Network interface to bind |
 | `CVE2DETECT_PORT` | `8787` | Port to bind |
 | `CVE2DETECT_DAILY_SEARCH` | `0` | Set to `1` to enable scheduled 24h discovery searches |
 | `CVE2DETECT_SEARCH_RECENCY_MINUTES` | `1440` | Recency threshold for discovery searches (in minutes) |
 | `CVE2DETECT_TRUST_PROXY` | `0` | Set to `1` to trust `X-Forwarded-For` from reverse proxies |
 
-## Deployment & Networking
+## Running locally
 
-1. **Local Deployment:** Running `python app.py` binds to `127.0.0.1:8787` by default, ensuring the service is accessible only on the local machine.
-2. **Network / Reverse Proxy Deployment:** To host the project for a team behind a reverse proxy (e.g., Nginx, Caddy, Traefik):
-   - Set `CVE2DETECT_HOST=0.0.0.0` or bind to an internal network interface.
-   - Terminate TLS at the reverse proxy.
-   - Configure the reverse proxy to overwrite the `X-Forwarded-For` header with the real remote client IP, and set `CVE2DETECT_TRUST_PROXY=1`.
-3. **Secret Isolation:** `.env` is gitignored by default. The `/api/health` endpoint exposes configuration status booleans (e.g., `keys.llm = true`), never revealing actual API tokens.
+`python app.py` binds to `127.0.0.1:8787` unless `CVE2DETECT_HOST` / `CVE2DETECT_PORT` say otherwise. `.env` is gitignored. `/api/health` reports booleans such as `keys.llm`, never the tokens.
+
+This project is meant to run on your machine. It is not a public website.
 
 ## Testing
 
@@ -234,7 +235,7 @@ Test coverage includes:
 - `IntelExtraction` Pydantic schema validation
 - Sigma YAML assembly and pySigma compilation using sample fixtures
 - SQLite store operations
-- Public HTTP routes and health checks (verifying stateless operation and sample pipeline execution)
+- HTTP routes and health checks (stateless operation and sample pipeline)
 
 ## Operational Limitations
 
@@ -245,8 +246,9 @@ Test coverage includes:
 
 ## Design & Security Invariants
 
-- **Default Loopback Binding:** Binds to `127.0.0.1` unless explicitly reconfigured.
-- **No Ingestion of SIEM Credentials:** The application does not store or prompt for SIEM access credentials.
-- **Stateless Pipeline Data:** Advisories and generated rules are not persisted in the database.
-- **Safe Staging Commands:** Atomic test commands sanitize remote C2 IPs and domains to reserved test documentation values.
-- **Standardized Rule Status:** Generated Sigma rules are strictly marked `status: experimental`.
+- Binds to `127.0.0.1` unless reconfigured.
+- Does not store or prompt for SIEM credentials.
+- Advisories and generated rules are not persisted in SQLite.
+- Atomic tests rewrite C2 to documentation ranges.
+- Generated Sigma `status` is always `experimental`.
+- LLM 429/503 retries, then `LLM_MODELS` fallbacks; 401/403 do not failover.

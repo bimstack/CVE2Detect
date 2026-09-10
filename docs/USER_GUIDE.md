@@ -2,7 +2,7 @@
 
 A detection engineering tool for SOC analysts and detection teams. You do not need to write Sigma by hand, but you should know CVE, ATT&CK, and how your SIEM searches logs.
 
-CVE2Detect is an open-source project designed around a **generate-and-copy** workflow. You provide an advisory (via URL, pasted Markdown, or discovery search), extract structured threat intel, and generate portable detection rules ready to copy directly into your security tools. The application operates statelessly for runs: it does not require SIEM write credentials, connect directly to production SIEMs, or persist pipeline runs to a server-side database.
+CVE2Detect is a local **generate-and-copy** project. You provide an advisory (via URL, pasted Markdown, or discovery search), extract structured threat intel, and generate portable detection rules to copy into your own tools. Runs are not written to a server-side database. The project does not take SIEM credentials or connect to a SIEM.
 
 ## What It Does
 
@@ -39,16 +39,16 @@ The tool is a detection assistant: it does not automatically deploy rules or rep
 
 3. Configure your keys in `.env` (copied from `.env.example`):
    - **Fetch** — `CVE2DETECT_FETCH_PROVIDER=http` (no key required for plain HTTP) or configure a search/render API via `FETCH_API_KEY`.
-   - **LLM** — `LLM_API_KEY`, `LLM_MODEL`, and optionally `LLM_API_BASE` for any OpenAI-compatible endpoint (or Gemini).
+   - **LLM** — `LLM_API_KEY`, `LLM_MODEL`, and optionally `LLM_API_BASE` for any OpenAI-compatible endpoint (or Gemini). Optional `LLM_MODELS` is a comma-separated fallback list used when the primary model returns 429/503.
 4. Run the application:
    ```bash
    python app.py
    ```
 5. Open [http://127.0.0.1:8787](http://127.0.0.1:8787) in your browser.
 
-Header indicators display **Fetch** and **LLM** status. An inactive pill indicates that the corresponding provider is unconfigured in `.env`.
+Header indicators display **Fetch** and **LLM** status. An inactive pill means that slot is empty in `.env`.
 
-The application binds to localhost (`127.0.0.1`) by default. To expose it on a local network interface or behind a reverse proxy, set `CVE2DETECT_HOST` in `.env`.
+The process binds to localhost (`127.0.0.1`) by default.
 
 ## Application Views
 
@@ -65,12 +65,12 @@ Select the technologies you monitor (Windows Server, IIS, M365, Fortinet, Ivanti
 - The profile is stored locally in your browser's `localStorage`.
 - Asset IDs are sent to the server only when executing **Run pipeline** to perform stack matching.
 - Subsequent runs tag the intel pane with:
-  - **stack match** — affected product is in your environment profile.
-  - **out of scope** — affected product is not in your profile.
+  - **stack match** — affected software is in your environment profile.
+  - **out of scope** — affected software is not in your profile.
   - **no profile** — no assets have been selected.
 - The Archive can be filtered by **Stack matches only**.
 
-Because CVE2Detect uses a generate-and-copy model, there are no SIEM credentials or webhook configurations required on this screen.
+There are no SIEM credentials or webhook fields on this screen. Copy queries out after a run.
 
 ### Pipeline
 
@@ -95,11 +95,13 @@ Displays extracted CVE, CVSS, vulnerability type, threat actor, campaign, affect
 | Retro-hunt | Query tailored for 30 / 60 / 90 day look-backs |
 | Atomic test | Staging validation command with C2 rewritten to `example.com` |
 
-- **validated** indicates the YAML successfully parsed and validated as a Sigma rule. It is a syntactically verified rule draft, not a pre-tuned production alert. Always hunt and test against your telemetry before enabling.
+- **validated** means the YAML parsed as Sigma. It is a draft. Hunt and test against your telemetry before enabling.
 - **Copy** copies the active tab contents to your clipboard.
 - **Download .yml** downloads the generated Sigma rule file.
 
-*Note on Rate Limits:* The built-in in-process rate limiter (default: 8 pipeline runs and 6 discovery scans per client IP per 10 minutes) protects against runaway API calls and accidental token consumption.
+Rate limits (per client IP, 10-minute window): 8 pipeline runs and 6 discovery scans.
+
+If extract fails with “LLM is unavailable (high demand or outage)”, the primary model was busy even after retries and fallbacks. Wait a minute and run again, or add more ids to `LLM_MODELS` in `.env`.
 
 ### Archive
 
@@ -124,8 +126,8 @@ The bundled sample runs completely offline without requiring any API keys. Live 
 **Why did fetch return a 404 error?**  
 Ensure you paste the clean URL from your browser address bar rather than an incomplete Markdown link or relative URL.
 
-**Why is there no direct SIEM deploy option?**  
-CVE2Detect deliberately adopts a generate-and-copy architecture. By not managing direct SIEM API connections or credentials, the application minimizes security risks and operational complexity. Copy the generated Splunk, Elastic, Sentinel, Wazuh, or LimaCharlie queries into your production consoles after testing.
+**Why is there no SIEM deploy option?**  
+This project only generates text for you to copy. Paste Splunk, Elastic, Sentinel, Wazuh, or LimaCharlie output into the console you already use, after you have hunted and tested.
 
 **Why did my Archive clear?**  
 Archive records are held in the browser's `sessionStorage` and persist only for the life of the current browser tab. Use **Download .yml** or copy rules you wish to retain permanently.

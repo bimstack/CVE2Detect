@@ -200,7 +200,7 @@ def match_stack(
         labels = ", ".join(sorted({h["label"] for h in hits}))
         reason = f"Matches your estate: {labels}."
     else:
-        reason = "Does not match the products in your environment profile."
+        reason = "Does not match the technologies in your environment profile."
     return {
         "configured": True,
         "matched": bool(hits),

@@ -183,11 +183,36 @@ def llm_model() -> str:
     return "gpt-4o-mini"
 
 
-def provider_status() -> dict[str, str | bool]:
+_GEMINI_DEFAULT_FALLBACKS = ("gemini-2.5-flash", "gemini-2.0-flash")
+
+
+def llm_models() -> list[str]:
+    """Primary model first, then extras from LLM_MODELS (comma-separated).
+
+    When the provider is Gemini and LLM_MODELS is empty, a short same-vendor
+    fallback list is used so a 503 on one SKU can try another.
+    Set LLM_MODELS=none to disable those defaults.
+    """
+    reload_env()
+    primary = llm_model()
+    extra = (os.environ.get("LLM_MODELS") or os.environ.get("GEMINI_MODELS") or "").strip()
+    if extra.lower() in {"none", "off", "-"}:
+        extra = ""
+    elif not extra and llm_provider() == "gemini":
+        extra = ",".join(_GEMINI_DEFAULT_FALLBACKS)
+    ordered: list[str] = []
+    for item in [primary, *[part.strip() for part in extra.split(",")]]:
+        if item and item not in ordered:
+            ordered.append(item)
+    return ordered
+
+
+def provider_status() -> dict[str, str | bool | list[str]]:
     return {
         "fetch": fetch_provider(),
         "llm": llm_provider(),
         "model": llm_model(),
+        "models": llm_models(),
         "fetch_ready": fetch_ready(),
         "llm_ready": llm_ready(),
         "search_ready": search_ready(),

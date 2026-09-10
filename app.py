@@ -1,4 +1,4 @@
-"""CVE2Detect — public generate-and-copy threat-intel-to-Sigma console."""
+"""CVE2Detect — local threat-intel-to-Sigma project."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from pipeline.orchestrate import run_pipeline  # noqa: E402
 from pipeline.profile import ASSET_CATALOG  # noqa: E402
 from pipeline.settings import (  # noqa: E402
     llm_model,
+    llm_models,
     provider_status,
     search_ready,
 )
@@ -33,7 +34,7 @@ from pipeline.store import init_db, list_feed, upsert_feed  # noqa: E402
 UI_DIR = ROOT / "ui"
 init_db()
 
-app = FastAPI(title="CVE2Detect", version="1.0.0")
+app = FastAPI(title="CVE2Detect", version="0.1.0")
 
 # IP → timestamps for a simple sliding window (no extra dependency).
 _rate: dict[str, deque[float]] = defaultdict(deque)
@@ -103,14 +104,15 @@ def health() -> dict[str, Any]:
     status = provider_status()
     return {
         "ok": True,
-        "service": "cve2detect",
-        "mode": "public",
+        "project": "cve2detect",
+        "mode": "project",
         "keys": _keys(),
         "providers": {
             "fetch": status["fetch"],
             "llm": status["llm"],
         },
         "model": llm_model(),
+        "models": llm_models(),
         "daily_search": os.environ.get("CVE2DETECT_DAILY_SEARCH", "0") == "1",
         "persist_jobs": False,
     }

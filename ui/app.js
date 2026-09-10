@@ -2,6 +2,7 @@ const state = {
   record: null,
   tab: "yaml",
   view: "pipeline",
+  pane: "intel",
   running: false,
   feed: [],
   catalog: [],
@@ -10,7 +11,7 @@ const state = {
 
 const TAB_HINTS = {
   yaml: "Generic Sigma YAML. Vendor queries are on the other tabs.",
-  splunk: "Splunk SPL. Hunt first; do not enable as a production correlation until tested.",
+  splunk: "Splunk SPL. Hunt first; do not enable as a live correlation until tested.",
   elastic: "Elastic query / DSL for Kibana.",
   kql: "Microsoft Sentinel / Defender KQL.",
   wazuh: "Wazuh XML for local_rules. Import disabled until the atomic test fires.",
@@ -132,6 +133,8 @@ function renderFeed() {
       host.querySelectorAll(".feed-item").forEach((n) => n.classList.remove("active"));
       el.classList.add("active");
       switchView("pipeline");
+      setPane("intel");
+      closeRail();
     });
   });
 }
@@ -321,6 +324,10 @@ async function runPipeline({ url = "", useSample = false, markdown = "" } = {}) 
           rememberRecord(event.record);
           await loadFeed();
           loadArchive();
+          if (isNarrow()) {
+            setPane("output");
+            if ($("sigma-col")) $("sigma-col").scrollIntoView({ behavior: "smooth", block: "start" });
+          }
         }
         if (event.event === "error") {
           setStage(event.stage || "ingest", "error");
@@ -337,15 +344,44 @@ async function runPipeline({ url = "", useSample = false, markdown = "" } = {}) 
   }
 }
 
+function isNarrow() {
+  return window.matchMedia("(max-width: 1100px)").matches;
+}
+
+function openRail() {
+  document.body.classList.add("rail-open");
+  if ($("btn-open-rail")) $("btn-open-rail").setAttribute("aria-expanded", "true");
+  if ($("backdrop")) $("backdrop").hidden = false;
+}
+
+function closeRail() {
+  document.body.classList.remove("rail-open");
+  if ($("btn-open-rail")) $("btn-open-rail").setAttribute("aria-expanded", "false");
+  if ($("backdrop")) $("backdrop").hidden = true;
+}
+
+function setPane(pane) {
+  state.pane = pane === "output" ? "output" : "intel";
+  if ($("split")) {
+    $("split").classList.toggle("show-intel", state.pane === "intel");
+    $("split").classList.toggle("show-output", state.pane === "output");
+  }
+  document.querySelectorAll("[data-pane]").forEach((btn) => {
+    btn.classList.toggle("on", btn.dataset.pane === state.pane);
+  });
+}
+
 function switchView(view) {
   state.view = view;
-  document.querySelectorAll(".view-switch button").forEach((btn) => {
+  document.querySelectorAll("[data-view]").forEach((btn) => {
     btn.classList.toggle("on", btn.dataset.view === view);
   });
   $("pipeline-view").classList.toggle("hidden", view !== "pipeline");
   $("split").classList.toggle("hidden", view !== "pipeline");
+  if ($("pane-switch")) $("pane-switch").classList.toggle("hidden", view !== "pipeline");
   $("archive-view").classList.toggle("hidden", view !== "archive");
   $("estate-view").classList.toggle("hidden", view !== "estate");
+  if (view !== "pipeline") closeRail();
 }
 
 function loadArchive(q = "") {
@@ -388,12 +424,14 @@ function loadArchive(q = "") {
       if (!rec) return;
       showRecord(rec);
       switchView("pipeline");
+      setPane("intel");
       setStatus("Loaded " + rec.title + " from this session.");
     });
   });
 }
 
 async function discover() {
+  openRail();
   setStatus("Running 24h discovery…");
   $("btn-discover").disabled = true;
   try {
@@ -431,12 +469,21 @@ $("url").addEventListener("keydown", (ev) => {
     runPipeline({ url: cleaned });
   }
 });
-document.querySelectorAll(".view-switch button").forEach((btn) => {
+document.querySelectorAll("[data-view]").forEach((btn) => {
   btn.addEventListener("click", () => {
     switchView(btn.dataset.view);
     if (btn.dataset.view === "archive") loadArchive($("archive-q").value);
     if (btn.dataset.view === "estate") loadEstate();
   });
+});
+document.querySelectorAll("[data-pane]").forEach((btn) => {
+  btn.addEventListener("click", () => setPane(btn.dataset.pane));
+});
+if ($("btn-open-rail")) $("btn-open-rail").addEventListener("click", openRail);
+if ($("btn-close-rail")) $("btn-close-rail").addEventListener("click", closeRail);
+if ($("backdrop")) $("backdrop").addEventListener("click", closeRail);
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeRail();
 });
 document.querySelectorAll("#tabs button").forEach((btn) => {
   btn.addEventListener("click", () => {

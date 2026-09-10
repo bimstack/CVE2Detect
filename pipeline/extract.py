@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 import httpx
 
 from pipeline.schema import ANALYST_SYSTEM_PROMPT, IntelExtraction, make_strict_schema
-from pipeline.settings import llm_api_base, llm_api_key, llm_model, llm_provider
+from pipeline.settings import llm_api_base, llm_api_key, llm_models, llm_provider
 
 ProgressFn = Callable[[str, str], None]
 ROOT = Path(__file__).resolve().parent.parent
@@ -18,11 +19,58 @@ SAMPLE_EXTRACTION = ROOT / "samples" / "extraction.json"
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 MAX_MARKDOWN_CHARS = 80_000
+ATTEMPTS_PER_MODEL = 2
+BACKOFF_S = (2.0, 4.0)
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 
 
 class ExtractError(RuntimeError):
     pass
+
+
+class LlmHttpError(ExtractError):
+    """Typed LLM HTTP failure so the caller can retry or skip a model."""
+
+    def __init__(self, message: str, *, status: int, retryable: bool, skip_model: bool) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+        self.skip_model = skip_model
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _raise_http(status: int, body: str, model: str) -> None:
+    snippet = (body or "")[:400]
+    if status in (401, 403):
+        raise LlmHttpError(
+            "LLM rejected the API key. Check LLM_API_KEY.",
+            status=status,
+            retryable=False,
+            skip_model=False,
+        )
+    if status == 404:
+        raise LlmHttpError(
+            f"LLM model '{model}' was not found.",
+            status=status,
+            retryable=False,
+            skip_model=True,
+        )
+    if status in (408, 429, 500, 502, 503, 504):
+        raise LlmHttpError(
+            f"LLM HTTP {status} for {model}: {snippet}",
+            status=status,
+            retryable=True,
+            skip_model=False,
+        )
+    raise LlmHttpError(
+        f"LLM HTTP {status} for {model}: {snippet}",
+        status=status,
+        retryable=False,
+        skip_model=False,
+    )
 
 
 def load_sample_extraction() -> IntelExtraction:
@@ -88,8 +136,20 @@ def _extract_gemini(markdown: str, source_url: str, title: str, key: str, model:
                 headers={"x-goog-api-key": key, "Content-Type": "application/json"},
                 json=body,
             )
+    except httpx.TimeoutException as exc:
+        raise LlmHttpError(
+            f"LLM timed out for {model}: {exc}",
+            status=408,
+            retryable=True,
+            skip_model=False,
+        ) from exc
     except httpx.HTTPError as exc:
-        raise ExtractError(f"LLM request failed: {exc}") from exc
+        raise LlmHttpError(
+            f"LLM request failed for {model}: {exc}",
+            status=503,
+            retryable=True,
+            skip_model=False,
+        ) from exc
 
     if response.status_code == 400:
         fallback_body = json.loads(json.dumps(body))
@@ -102,14 +162,8 @@ def _extract_gemini(markdown: str, source_url: str, title: str, key: str, model:
                 json=fallback_body,
             )
 
-    if response.status_code in (401, 403):
-        raise ExtractError("LLM rejected the API key. Check LLM_API_KEY.")
-    if response.status_code == 404:
-        raise ExtractError(
-            f"LLM model '{model}' was not found. Set LLM_MODEL in .env."
-        )
     if response.status_code >= 400:
-        raise ExtractError(f"LLM HTTP {response.status_code}: {response.text[:500]}")
+        _raise_http(response.status_code, response.text, model)
 
     return IntelExtraction.model_validate(_parse_json_content(_gemini_response_text(response.json())))
 
@@ -162,23 +216,41 @@ def _extract_openai(markdown: str, source_url: str, title: str, key: str, model:
 
     try:
         response = _post(strict_body)
+    except httpx.TimeoutException as exc:
+        raise LlmHttpError(
+            f"LLM timed out for {model}: {exc}",
+            status=408,
+            retryable=True,
+            skip_model=False,
+        ) from exc
     except httpx.HTTPError as exc:
-        raise ExtractError(f"LLM request failed: {exc}") from exc
+        raise LlmHttpError(
+            f"LLM request failed for {model}: {exc}",
+            status=503,
+            retryable=True,
+            skip_model=False,
+        ) from exc
 
     if response.status_code == 400:
         try:
             response = _post(loose_body)
+        except httpx.TimeoutException as exc:
+            raise LlmHttpError(
+                f"LLM timed out for {model}: {exc}",
+                status=408,
+                retryable=True,
+                skip_model=False,
+            ) from exc
         except httpx.HTTPError as exc:
-            raise ExtractError(f"LLM request failed: {exc}") from exc
+            raise LlmHttpError(
+                f"LLM request failed for {model}: {exc}",
+                status=503,
+                retryable=True,
+                skip_model=False,
+            ) from exc
 
-    if response.status_code in (401, 403):
-        raise ExtractError("LLM rejected the API key. Check LLM_API_KEY.")
-    if response.status_code == 404:
-        raise ExtractError(
-            f"LLM model '{model}' was not found at {base}. Set LLM_MODEL / LLM_API_BASE."
-        )
     if response.status_code >= 400:
-        raise ExtractError(f"LLM HTTP {response.status_code}: {response.text[:500]}")
+        _raise_http(response.status_code, response.text, model)
 
     payload = response.json()
     choices = payload.get("choices") or []
@@ -216,10 +288,46 @@ def extract_intel(
         text = text[:MAX_MARKDOWN_CHARS] + "\n\n[truncated for context window]"
 
     provider = llm_provider()
-    model = llm_model()
-    if progress:
-        progress("extract", f"LLM ({provider} / {model}) acting as Senior Threat Analyst.")
-
-    if provider == "gemini":
-        return _extract_gemini(text, source_url, title, key, model)
-    return _extract_openai(text, source_url, title, key, model, llm_api_base())
+    models = llm_models()
+    last_err: Exception | None = None
+    for index, model in enumerate(models):
+        for attempt in range(1, ATTEMPTS_PER_MODEL + 1):
+            label = f"LLM ({provider} / {model})"
+            if index > 0:
+                label = f"Fallback {label}"
+            if attempt > 1:
+                label = f"{label} retry {attempt}/{ATTEMPTS_PER_MODEL}"
+            if progress:
+                progress("extract", f"{label} acting as Senior Threat Analyst.")
+            try:
+                if provider == "gemini":
+                    return _extract_gemini(text, source_url, title, key, model)
+                return _extract_openai(text, source_url, title, key, model, llm_api_base())
+            except LlmHttpError as exc:
+                last_err = exc
+                if not exc.retryable and not exc.skip_model:
+                    raise
+                if exc.skip_model:
+                    if progress:
+                        progress("extract", f"{model} was not found. Trying the next model.")
+                    break
+                more_attempts = attempt < ATTEMPTS_PER_MODEL
+                if more_attempts:
+                    delay = BACKOFF_S[min(attempt - 1, len(BACKOFF_S) - 1)]
+                    if progress:
+                        progress(
+                            "extract",
+                            f"{model} is busy (HTTP {exc.status}). Retrying in {int(delay)}s.",
+                        )
+                    _sleep(delay)
+                    continue
+                if index < len(models) - 1 and progress:
+                    progress("extract", f"{model} still unavailable. Trying the next model.")
+                break
+    tried = ", ".join(models)
+    detail = str(last_err) if last_err else "no response"
+    raise ExtractError(
+        "LLM is unavailable (high demand or outage). "
+        f"Tried: {tried}. Wait a minute and retry, or add more ids to LLM_MODELS. "
+        f"Last error: {detail}"
+    )

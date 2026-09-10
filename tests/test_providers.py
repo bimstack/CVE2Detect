@@ -15,6 +15,8 @@ def _isolate_env(monkeypatch) -> None:
         "LLM_PROVIDER",
         "LLM_API_KEY",
         "LLM_MODEL",
+        "LLM_MODELS",
+        "GEMINI_MODELS",
         "LLM_API_BASE",
         "OPENAI_BASE_URL",
         "GEMINI_API_KEY",
@@ -56,6 +58,31 @@ def test_llm_gemini_alias(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
     assert settings.llm_provider() == "gemini"
     assert settings.llm_api_key() == "gemini-test"
+
+
+def test_llm_models_primary_then_fallbacks(monkeypatch):
+    _isolate_env(monkeypatch)
+    monkeypatch.setenv("LLM_MODEL", "gemini-3.8-flash")
+    monkeypatch.setenv("LLM_MODELS", "gemini-2.5-flash, gemini-3.8-flash, gemini-2.0-flash")
+    assert settings.llm_models() == [
+        "gemini-3.8-flash",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+    ]
+
+
+def test_gemini_default_fallbacks_when_models_unset(monkeypatch):
+    _isolate_env(monkeypatch)
+    monkeypatch.setenv("LLM_MODEL", "gemini-3.8-flash")
+    assert settings.llm_models()[0] == "gemini-3.8-flash"
+    assert "gemini-2.5-flash" in settings.llm_models()
+
+
+def test_llm_models_none_disables_defaults(monkeypatch):
+    _isolate_env(monkeypatch)
+    monkeypatch.setenv("LLM_MODEL", "gemini-3.8-flash")
+    monkeypatch.setenv("LLM_MODELS", "none")
+    assert settings.llm_models() == ["gemini-3.8-flash"]
 
 
 def test_html_to_markdown_strips_chrome():

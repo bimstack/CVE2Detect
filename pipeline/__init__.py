@@ -1,4 +1,4 @@
-"""CVE2Detect — public generate-and-copy threat-intel-to-Sigma pipeline."""
+"""CVE2Detect — local threat-intel-to-Sigma project."""
 
 from pipeline.orchestrate import run_pipeline
 

@@ -11,7 +11,8 @@ def test_health_and_pages():
     assert health.status_code == 200
     body = health.json()
     assert body["ok"] is True
-    assert body["mode"] == "public"
+    assert body["mode"] == "project"
+    assert "models" in body
     assert body["persist_jobs"] is False
     assert "keys" in body
     assert "fetch" in body["keys"]
@@ -22,7 +23,10 @@ def test_health_and_pages():
     home = client.get("/")
     assert home.status_code == 200
     assert b"CVE2Detect" in home.content
-    assert b"does not connect to your SIEM" in home.content
+    assert b"does not connect to a SIEM" in home.content
+    assert b"btn-open-rail" in home.content
+    assert b'data-pane="output"' in home.content
+    assert b"class=\"dock\"" in home.content or b"class='dock'" in home.content or b'class="dock"' in home.content
     css = client.get("/static/styles.css")
     assert css.status_code == 200
     js = client.get("/static/app.js")

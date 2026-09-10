@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#090b08" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>CVE2Detect — Threat Intel to Sigma</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect fill='%090b08' width='32' height='32'/><text x='6' y='24' font-family='sans-serif' font-size='18' font-weight='700' fill='%23e6b325'>C</text></svg>" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -12,10 +14,14 @@
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
+  <button type="button" class="backdrop" id="backdrop" hidden aria-label="Close discovery feed"></button>
   <aside class="rail" id="rail">
     <div class="rail-head">
       <span class="kicker">Discovery feed</span>
-      <button type="button" class="ghost" id="btn-discover" title="Search the last 24 hours">Scan 24h</button>
+      <div class="rail-actions">
+        <button type="button" class="ghost" id="btn-discover" title="Search the last 24 hours">Scan 24h</button>
+        <button type="button" class="ghost icon-btn rail-close" id="btn-close-rail" aria-label="Close discovery feed">Close</button>
+      </div>
     </div>
     <p class="rail-note">CVE write-ups and incident reports from the last 24 hours. Select an item, then run the pipeline.</p>
     <div class="feed" id="feed">
@@ -26,6 +32,7 @@
   <div class="workspace">
     <header class="top">
       <div class="brand">
+        <button type="button" class="ghost icon-btn feed-toggle" id="btn-open-rail" aria-controls="rail" aria-expanded="false">Feed</button>
         <svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
           <rect x="1" y="1" width="46" height="46" fill="none" stroke="currentColor" stroke-width="2"/>
           <path d="M10 12h18L10 36h18" fill="none" stroke="currentColor" stroke-width="4"/>
@@ -76,13 +83,21 @@
         <input id="url" name="url" type="url" placeholder="https://research.example.com/cve-writeup" spellcheck="false" />
         <button type="submit" class="primary" id="btn-run">Run pipeline</button>
         <button type="button" class="ghost" id="btn-sample">Load sample</button>
-        <textarea id="markdown" name="markdown" rows="3" placeholder="Or paste advisory Markdown (skips live fetch)"></textarea>
+        <details class="md-fold">
+          <summary>Paste Markdown instead of a URL</summary>
+          <textarea id="markdown" name="markdown" rows="4" placeholder="Paste the advisory text here. Live fetch is skipped."></textarea>
+        </details>
       </form>
       <p class="status-line" id="status-line">Paste an advisory URL or Markdown, pick a feed item, or load the sample rule.</p>
-      <p class="rail-note">Generated detections are experimental until you hunt and test them. Copy queries into your own tools — this service does not connect to a SIEM or store your runs.</p>
+      <p class="rail-note">Generated detections are experimental until you hunt and test them. Copy queries into your own tools — this project does not connect to a SIEM or store your runs.</p>
     </section>
 
-    <section class="split" id="split">
+    <div class="pane-switch" id="pane-switch" role="tablist" aria-label="Results">
+      <button type="button" class="on" data-pane="intel">Intel</button>
+      <button type="button" data-pane="output">Detections</button>
+    </div>
+
+    <section class="split show-intel" id="split">
       <article class="col intel" id="intel-col">
         <header class="col-head">
           <span class="kicker">Threat intelligence</span>
@@ -94,7 +109,7 @@
         <div id="intel-body" class="col-body">
           <div class="empty">
             <strong>No advisory loaded</strong>
-            <span>Optional: set your stack under Environment. Run the pipeline to get CVE, ATT&amp;CK, host telemetry, Sigma, and SIEM queries. Copy them into your own tools — CVE2Detect does not connect to your SIEM.</span>
+            <span>Optional: set your stack under Environment. Run the pipeline to get CVE, ATT&amp;CK, host telemetry, Sigma, and SIEM queries. Copy them into your own tools — this project does not connect to a SIEM.</span>
           </div>
         </div>
       </article>
@@ -142,7 +157,7 @@
         </div>
         <button type="button" class="primary" id="btn-save-estate">Save profile</button>
       </div>
-      <p class="estate-lead">Select products you monitor. Matching stays in this browser only. Advisories that do not match are tagged out of scope. CVE2Detect never connects to your SIEM or chat tools — copy the queries out.</p>
+      <p class="estate-lead">Select technologies you monitor. Matching stays in this browser only. Advisories that do not match are tagged out of scope. This project never connects to a SIEM — copy the queries out.</p>
       <div class="asset-grid" id="asset-grid"></div>
       <div class="estate-grid">
         <div>
@@ -157,6 +172,12 @@
         </div>
       </div>
     </section>
+
+    <nav class="dock" aria-label="Primary">
+      <button type="button" class="on" data-view="pipeline">Pipeline</button>
+      <button type="button" data-view="archive">Archive</button>
+      <button type="button" data-view="estate">Environment</button>
+    </nav>
   </div>
 
   <script src="/static/app.js"></script>

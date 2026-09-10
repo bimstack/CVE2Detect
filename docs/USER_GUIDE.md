@@ -1,121 +1,134 @@
-# CVE2Detect user guide
+# CVE2Detect User Guide
 
-For SOC analysts and small detection teams. You do not need to write Sigma by hand, but you should know CVE, ATT&CK, and how your SIEM searches logs.
+A detection engineering tool for SOC analysts and detection teams. You do not need to write Sigma by hand, but you should know CVE, ATT&CK, and how your SIEM searches logs.
 
-This is the **public generate-and-copy** product. You paste or pick an advisory, get detections, and copy them into your own tools. CVE2Detect never logs into a SIEM and never stores your runs for other users.
+CVE2Detect is an open-source project designed around a **generate-and-copy** workflow. You provide an advisory (via URL, pasted Markdown, or discovery search), extract structured threat intel, and generate portable detection rules ready to copy directly into your security tools. The application operates statelessly for runs: it does not require SIEM write credentials, connect directly to production SIEMs, or persist pipeline runs to a server-side database.
 
-## What it is
+## What It Does
 
 CVE2Detect turns a public vulnerability write-up into:
 
 - Structured intel (CVE, CVSS, actor, ATT&CK, host telemetry, IoCs)
 - A generic **Sigma** rule (`status: experimental`)
-- Vendor queries (Splunk SPL, Elastic, Sentinel KQL, Wazuh XML, LimaCharlie D&R)
-- A **retro-hunt** (30 / 60 / 90 days)
-- An **atomic test** for a staging host (C2 replaced with example.com / TEST-NET-3)
+- Vendor queries (Splunk SPL, Elastic Query DSL, Sentinel KQL, Wazuh XML, LimaCharlie D&R)
+- A **retro-hunt** query (30 / 60 / 90 days)
+- An **atomic test** for a staging host (C2 replaced with `example.com` / TEST-NET-3)
 
-It does not enable alerts, does not deploy rules, and does not replace rule review. Hunt first.
+The tool is a detection assistant: it does not automatically deploy rules or replace manual rule review. Always hunt and tune false positives first.
 
-## Setup (self-host)
+## Installation & Setup
 
-1. Open PowerShell in the `CVE2Detect` folder.
-2. First time:
+1. Open a terminal (PowerShell, bash, or zsh) in the `CVE2Detect` project directory.
+2. Set up a virtual environment and install dependencies:
 
-   ```
+   **Windows (PowerShell):**
+   ```powershell
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
    copy .env.example .env
    ```
 
-3. Put **your** keys in `.env` (copy from `.env.example`):
-   - **Fetch** — `CVE2DETECT_FETCH_PROVIDER=http` (no key) or a search/render API via `FETCH_API_KEY`
-   - **LLM** — `LLM_API_KEY`, `LLM_MODEL`, and if needed `LLM_API_BASE` for any OpenAI-compatible endpoint
-4. `python app.py`
-5. Open [http://127.0.0.1:8787](http://127.0.0.1:8787)
+   **macOS / Linux:**
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   cp .env.example .env
+   ```
 
-Header pills: **Fetch live** / **LLM live**. Missing means that slot is empty — save `.env` and refresh.
+3. Configure your keys in `.env` (copied from `.env.example`):
+   - **Fetch** — `CVE2DETECT_FETCH_PROVIDER=http` (no key required for plain HTTP) or configure a search/render API via `FETCH_API_KEY`.
+   - **LLM** — `LLM_API_KEY`, `LLM_MODEL`, and optionally `LLM_API_BASE` for any OpenAI-compatible endpoint (or Gemini).
+4. Run the application:
+   ```bash
+   python app.py
+   ```
+5. Open [http://127.0.0.1:8787](http://127.0.0.1:8787) in your browser.
 
-The process binds to this machine only (`127.0.0.1`) unless you change `CVE2DETECT_HOST` for hosting behind a reverse proxy.
+Header indicators display **Fetch** and **LLM** status. An inactive pill indicates that the corresponding provider is unconfigured in `.env`.
 
-## Screens
+The application binds to localhost (`127.0.0.1`) by default. To expose it on a local network interface or behind a reverse proxy, set `CVE2DETECT_HOST` in `.env`.
 
-| Nav | Use |
+## Application Views
+
+| View | Purpose |
 |---|---|
-| **Pipeline** | Ingest an advisory and copy intel + detections |
-| **Archive** | Runs from **this browser tab** (cleared when the tab closes) |
-| **Environment** | Products you monitor + retro-hunt window (saved in this browser) |
+| **Pipeline** | Ingest an advisory and generate structured threat intel + detections |
+| **Archive** | View runs from the current browser session (`sessionStorage`) |
+| **Environment** | Define monitored assets and default retro-hunt windows (`localStorage`) |
 
-### Environment (optional, do this first)
+### Environment (Recommended First Step)
 
-Select products you monitor (Windows Server, IIS, M365, Fortinet, Ivanti, AWS, …). Save profile. The list stays in `localStorage` on this machine. It is sent to the server only as asset IDs on the next **Run pipeline**, so matching can run.
+Select the technologies you monitor (Windows Server, IIS, M365, Fortinet, Ivanti, AWS, etc.) and save your profile.
 
-Later runs stamp the intel pane:
+- The profile is stored locally in your browser's `localStorage`.
+- Asset IDs are sent to the server only when executing **Run pipeline** to perform stack matching.
+- Subsequent runs tag the intel pane with:
+  - **stack match** — affected product is in your environment profile.
+  - **out of scope** — affected product is not in your profile.
+  - **no profile** — no assets have been selected.
+- The Archive can be filtered by **Stack matches only**.
 
-- **stack match** — in scope
-- **out of scope** — not in the profile
-- **no profile** — nothing selected yet
-
-Archive can filter **Stack matches only**.
-
-There are no webhook URLs and no SIEM credentials on this screen. Copy the query from the detection tabs into your own console.
+Because CVE2Detect uses a generate-and-copy model, there are no SIEM credentials or webhook configurations required on this screen.
 
 ### Pipeline
 
-1. **Scan 24h** — fill the shared discovery feed, click an item (needs a search-capable fetch provider)  
-   **or** paste an **Advisory URL**  
-   **or** paste **advisory Markdown** (skips live fetch)  
-   **or** **Load sample** (offline IIS RCE fixture)
-2. **Run pipeline** — stages: Ingest → Extract → Validate → Output
+1. Ingest an advisory using one of four methods:
+   - **Scan 24h** — populate the discovery feed and select an article (requires a search-capable fetch provider).
+   - **Advisory URL** — paste a direct link to an advisory or write-up.
+   - **Advisory Markdown** — paste raw Markdown directly (skips external fetch).
+   - **Load sample** — load an offline IIS RCE fixture without calling external APIs.
+2. Click **Run pipeline** — executes through four stages: Ingest → Extract → Validate → Output.
 
-**Left — Threat intelligence**
+**Left Pane — Threat Intelligence**
 
-CVE, CVSS, type, actor, campaign, affected software, ATT&CK, host telemetry (Sysmon / 4688, etc.), process tree, IoCs, analyst notes.
+Displays extracted CVE, CVSS, vulnerability type, threat actor, campaign, affected software, ATT&CK mappings, host telemetry (Sysmon / Windows Event ID 4688), process tree anomalies, IoCs, and analyst notes.
 
-**Right — Detection output**
+**Right Pane — Detection Output**
 
 | Tab | Contents |
 |---|---|
-| Sigma | Portable YAML (`status: experimental`) |
-| Splunk / Elastic / Sentinel | Transpiled queries |
-| Wazuh / LimaCharlie | Open-source rule formats (LimaCharlie `enabled: false`) |
-| Retro-hunt | Same logic, last 30–90 days |
-| Atomic test | Staging command; C2 replaced with example.com |
+| Sigma | Portable YAML rule (`status: experimental`) |
+| Splunk / Elastic / Sentinel | Transpiled vendor queries |
+| Wazuh / LimaCharlie | Open-source detection formats (LimaCharlie defaults to `enabled: false`) |
+| Retro-hunt | Query tailored for 30 / 60 / 90 day look-backs |
+| Atomic test | Staging validation command with C2 rewritten to `example.com` |
 
-**validated** = YAML parsed as Sigma. It is not a production-ready correlation. Hunt first, then promote the rule in your SIEM.
+- **validated** indicates the YAML successfully parsed and validated as a Sigma rule. It is a syntactically verified rule draft, not a pre-tuned production alert. Always hunt and test against your telemetry before enabling.
+- **Copy** copies the active tab contents to your clipboard.
+- **Download .yml** downloads the generated Sigma rule file.
 
-**Copy** puts the current tab on the clipboard. **Download .yml** saves the Sigma rule.
-
-Rate limits (per client IP, 10-minute window): 8 pipeline runs, 6 discovery scans. Wait and retry if you see HTTP 429.
+*Note on Rate Limits:* The built-in in-process rate limiter (default: 8 pipeline runs and 6 discovery scans per client IP per 10 minutes) protects against runaway API calls and accidental token consumption.
 
 ### Archive
 
-This is not a shared knowledge base. Each completed run is kept in `sessionStorage` in this tab (up to 40). Other users, other browsers, and a closed tab cannot see it. Search and **Stack matches only** filter that local list.
+The Archive provides a local session history:
+- Completed runs are kept client-side in `sessionStorage` (up to 40 records).
+- Runs are tied to the active browser tab and clear when the tab closes.
+- The backend server does not maintain a database of generated rules.
+- Filter records using the search bar or the **Stack matches only** toggle.
 
-## Privacy
+## Data Handling & Architecture
 
-Article text is sent to **your configured fetch API** (or only to the target site if fetch is `http`) and Markdown is sent to **your configured LLM**. Do not process classified or internal advisories unless those providers are allowed to see the content.
+- **Article Fetching:** When using a URL, article text is retrieved using your configured fetch provider (or direct `http` GET).
+- **LLM Extraction:** The retrieved Markdown is submitted to your configured LLM API. Do not analyze confidential or classified advisories unless your chosen provider and endpoint meet your organization's data compliance requirements.
+- **Backend Storage:** The local SQLite database (`data/cve2detect.db`) is used exclusively to cache the **discovery feed** (public article titles and URLs from 24h scans). It does not store pipeline runs, extracted intelligence, or generated Sigma rules.
+- **Client Storage:** Monitored asset profiles reside in browser `localStorage`; run history resides in browser `sessionStorage`.
 
-The server stores:
+## Frequently Asked Questions
 
-- The **shared discovery feed** (public article titles/URLs from Scan 24h)
-- Nothing else from your pipeline: no Sigma YAML, no pasted Markdown after the request finishes, no SIEM credentials
+**What is the difference between Load sample and live URL runs?**  
+The bundled sample runs completely offline without requiring any API keys. Live URLs require a configured LLM provider plus a fetch provider (`http`, a dedicated fetch API, or pasted Markdown). The **Scan 24h** feature requires a search-capable fetch provider.
 
-Your stack profile lives in this browser. Your run history lives in this tab.
+**Why did fetch return a 404 error?**  
+Ensure you paste the clean URL from your browser address bar rather than an incomplete Markdown link or relative URL.
 
-## FAQ
+**Why is there no direct SIEM deploy option?**  
+CVE2Detect deliberately adopts a generate-and-copy architecture. By not managing direct SIEM API connections or credentials, the application minimizes security risks and operational complexity. Copy the generated Splunk, Elastic, Sentinel, Wazuh, or LimaCharlie queries into your production consoles after testing.
 
-**Load sample vs live URL**  
-Sample needs neither API. Live URLs need an LLM key plus fetch (`http`, a fetch API, or pasted Markdown). Scan 24h needs a search-capable fetch provider.
+**Why did my Archive clear?**  
+Archive records are held in the browser's `sessionStorage` and persist only for the life of the current browser tab. Use **Download .yml** or copy rules you wish to retain permanently.
 
-**404 on fetch**  
-Paste the browser address bar URL, not a Markdown link.
-
-**Where is Deploy?**  
-Public v1 is generate-and-copy only. Paste the Splunk / Elastic / Sentinel / Wazuh / LimaCharlie tab into the product you already operate.
-
-**Why did my Archive empty?**  
-It is this tab only. Copy or download anything you need to keep.
-
-**Can other users see my rules?**  
-No. Jobs are not written to the shared database.
+**Does the server store my generated detection rules?**  
+No. All pipeline executions are processed statelessly in memory and streamed directly to the browser client; they are not saved to the SQLite database.

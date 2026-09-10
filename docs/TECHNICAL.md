@@ -1,272 +1,252 @@
-# CVE2Detect technical documentation
+# CVE2Detect Technical Documentation
 
-## Role
+## Overview
 
-CVE2Detect is a FastAPI application that turns a public vulnerability write-up into a **generic Sigma rule** plus vendor queries (Splunk SPL, Elastic Query DSL, Microsoft Sentinel KQL, Wazuh XML, LimaCharlie D&R).
+CVE2Detect is a FastAPI application that ingests public vulnerability write-ups and threat advisories and produces **generic Sigma rules** along with transpiled vendor queries (Splunk SPL, Elastic Query DSL, Microsoft Sentinel KQL, Wazuh XML, and LimaCharlie D&R).
 
-Public v1 is a **generate-and-copy** service:
+It serves as a detection engineering assistant to accelerate rule authoring and threat hunting. It is not an automated scanner, exploit framework, or direct SIEM manager.
 
-- The HTTP layer does not persist pipeline jobs.
-- The UI archive is `sessionStorage` in the caller's tab (max 40 records).
-- The environment profile is `localStorage` (`cve2detect.profile`). Asset IDs are sent only on `POST /api/pipeline`.
-- There is no SIEM deploy API and no webhook API. Do not store SIEM credentials on a public host.
-- SQLite holds the **shared discovery feed** only.
-- Generated Sigma always uses `status: experimental`.
+## Architecture & Design Principles
 
-It is a detection-engineering assistant, not a scanner, exploit framework, or production SIEM. Live URL runs send page text to the **configured fetch provider** (or only to the target site if `http`). Extraction sends Markdown to the **configured LLM**.
+CVE2Detect is built around a lightweight, **generate-and-copy** architecture:
 
-## Four stages
+- **Stateless Pipeline Execution:** The HTTP layer processes pipeline runs in memory and streams results to the client via Server-Sent Events (SSE). Completed runs are not persisted to a server-side database.
+- **Client-Side Session State:** Run history is maintained in the user's browser tab using `sessionStorage` (capped at 40 records). Monitored asset profiles reside in browser `localStorage` (`cve2detect.profile`) and are transmitted to the backend only as asset IDs during pipeline runs.
+- **Decoupled Security Model:** The project eliminates the need to store sensitive SIEM API credentials or webhook secrets on the server. Detections are generated, reviewed, and copied into the target security tools.
+- **Scoped Database Storage:** The local SQLite database (`data/cve2detect.db`) is used exclusively to cache the discovery feed (`feed` table).
+- **Conservative Rule Status:** Generated Sigma rules enforce `status: experimental` to mandate human review, false-positive tuning, and proactive hunting before production deployment.
+
+## Pipeline Architecture
 
 ```
-URL or Search hit
+Advisory URL, Search hit, or Markdown paste
         │
         ▼
-[1 Ingest]  Fetch provider (http GET, or search/render API) / pasted Markdown
-        │  clean Markdown
+[1 Ingest]   Fetch provider (HTTP GET, search/render API) or pasted Markdown
+        │    Output: Clean Markdown
         ▼
-[2 Extract] Configured LLM structured JSON (IntelExtraction schema)
-        │  telemetry + Sigma field draft
+[2 Extract]  Configured LLM with structured JSON schema (IntelExtraction)
+        │    Output: Telemetry, ATT&CK mappings, and Sigma detection fields
         ▼
-[3 Validate] assemble YAML → yaml.safe_load → SigmaRule.from_yaml → backends
-        │  sigma_yaml + splunk_spl + elastic_dsl + sentinel_kql
-        │  + wazuh_xml + limacharlie_yaml + atomic tests + retro-hunt
+[3 Validate] Assemble YAML → yaml.safe_load → pySigma parsing → backends
+        │    Output: Sigma YAML + Splunk + Elastic + Sentinel
+        │            + Wazuh + LimaCharlie + Atomic tests + Retro-hunt
         ▼
-[4 Output]  SSE `complete` with the record → browser copy/download
-            (no INSERT into records; sessionStorage only)
+[4 Output]   SSE `complete` event streaming record to the browser
+             Client stores run in sessionStorage for copy / export
 ```
 
-| Stage | Module | External dependency |
+| Stage | Module | External Dependencies & Protocols |
 |---|---|---|
-| 1 Ingest | `pipeline/ingest.py`, `pipeline/settings.py` | `http` GET, or a TinyFish-shaped Search/Fetch/Agent API (`FETCH_*` URLs override hosts) |
-| 2 Extract | `pipeline/extract.py`, `pipeline/schema.py`, `pipeline/settings.py` | Gemini `generateContent`, or OpenAI-compatible `POST {LLM_API_BASE}/chat/completions` |
-| 3 Validate | `pipeline/sigma_build.py`, `pipeline/validate.py`, `pipeline/ossiem.py`, `pipeline/atomic.py`, `pipeline/hunt.py` | pySigma + Splunk / Elastic / Kusto backends |
-| 4 Output / UI | `pipeline/orchestrate.py`, `app.py`, `ui/` | Record shaped in memory; SQLite used only for `feed` |
+| 1 Ingest | `pipeline/ingest.py`, `pipeline/settings.py` | HTTP GET (`httpx`), or search/render API (`tinyfish` contract; host URLs overridable via `FETCH_*_URL`) |
+| 2 Extract | `pipeline/extract.py`, `pipeline/schema.py`, `pipeline/settings.py` | Gemini (`generateContent`), or OpenAI-compatible endpoint (`POST {LLM_API_BASE}/chat/completions`) |
+| 3 Validate | `pipeline/sigma_build.py`, `pipeline/validate.py`, `pipeline/ossiem.py`, `pipeline/atomic.py`, `pipeline/hunt.py` | `pySigma` core + Splunk, Elastic, and Kusto backends |
+| 4 Output / UI | `pipeline/orchestrate.py`, `app.py`, `ui/` | In-memory record assembly; SQLite used only for discovery `feed` |
 
-Orchestration lives in `pipeline/orchestrate.py`. The HTTP layer streams progress as SSE.
+Pipeline orchestration is managed by `pipeline/orchestrate.py`, with real-time stage progress streamed over SSE.
 
-## Layout
+## Project Structure
 
-| Path | Role |
+| Path | Purpose |
 |---|---|
-| `app.py` | FastAPI app, SSE pipeline, rate limits, optional 24h feed scheduler |
-| `pipeline/settings.py` | Fetch / LLM provider resolution from env |
-| `pipeline/ingest.py` | URL normalize, pluggable fetch, HTTP fallback, optional search |
-| `pipeline/schema.py` | Pydantic `IntelExtraction` + strict JSON Schema helper |
-| `pipeline/extract.py` | Pluggable LLM (`gemini` or OpenAI-compatible) with JSON schema |
-| `pipeline/sigma_build.py` | Deterministic YAML from structured fields (`status: experimental`) |
-| `pipeline/validate.py` | YAML + pySigma parse + transpile |
-| `pipeline/ossiem.py` | Wazuh XML and LimaCharlie D&R from Sigma selections |
-| `pipeline/atomic.py` | Sanitized Atomic Red Team-style commands |
-| `pipeline/hunt.py` | 30 / 60 / 90 day retro-hunt wrappers |
-| `pipeline/profile.py` | Asset catalog + stack matching |
-| `pipeline/store.py` | SQLite. Public v1 writes **feed** only. `save_record` / profile helpers remain for tests and private forks |
-| `pipeline/orchestrate.py` | Stage runner / SSE events (`_client_record`, no `save_record`) |
-| `pipeline/deploy.py` | Unused in public v1 (not imported by `app.py`) |
-| `pipeline/webhooks.py` | Unused in public v1 (not imported by `app.py`) |
-| `ui/` | Static console (`index.html`, `styles.css`, `app.js`) |
-| `samples/advisory.md` | Bundled IIS RCE write-up |
-| `samples/extraction.json` | Fixture extraction used when `use_sample=true` |
-| `data/cve2detect.db` | Shared discovery feed (gitignored) |
-| `tests/` | Schema, YAML, pySigma, store unit tests, public HTTP surface |
+| `app.py` | FastAPI application, SSE streaming endpoints, rate limiting, and discovery feed scheduler |
+| `pipeline/settings.py` | Provider and environment configuration resolution |
+| `pipeline/ingest.py` | URL normalization, pluggable article fetch, HTML-to-Markdown conversion, and search discovery |
+| `pipeline/schema.py` | Pydantic `IntelExtraction` data model and strict JSON schema generation helper |
+| `pipeline/extract.py` | Pluggable LLM extraction client (Gemini or OpenAI-compatible) using structured outputs |
+| `pipeline/sigma_build.py` | Deterministic Sigma YAML generation from structured fields (`status: experimental`) |
+| `pipeline/validate.py` | YAML validation, pySigma rule parsing, and vendor query compilation |
+| `pipeline/ossiem.py` | Wazuh XML and LimaCharlie D&R generation from Sigma detection selections |
+| `pipeline/atomic.py` | Atomic Red Team-style staging validation commands (C2 rewritten to safe domains) |
+| `pipeline/hunt.py` | 30 / 60 / 90 day retro-hunt query wrappers |
+| `pipeline/profile.py` | Monitored technology catalog and stack matching logic |
+| `pipeline/store.py` | SQLite operations for discovery `feed`. (Record persistence helpers remain available for tests and custom extensions) |
+| `pipeline/orchestrate.py` | Pipeline stage coordinator and SSE event emitter |
+| `pipeline/deploy.py` | Modular SIEM deployment extension (disabled in default configuration) |
+| `pipeline/webhooks.py` | Modular webhook notification extension (disabled in default configuration) |
+| `ui/` | Static front-end assets (`index.html`, `styles.css`, `app.js`) |
+| `samples/advisory.md` | Bundled IIS RCE vulnerability write-up fixture |
+| `samples/extraction.json` | Sample extraction fixture used when `use_sample=true` |
+| `data/cve2detect.db` | Local SQLite discovery feed database (gitignored) |
+| `tests/` | Test suite covering schemas, YAML building, pySigma transpilation, storage, and API surface |
 
 ## HTTP API
 
-Base URL: `http://127.0.0.1:8787` (override with `CVE2DETECT_HOST` / `CVE2DETECT_PORT`).
+Base URL: `http://127.0.0.1:8787` (configured via `CVE2DETECT_HOST` and `CVE2DETECT_PORT`).
 
-| Method | Path | Notes |
+### Active Endpoints
+
+| Method | Path | Description |
 |---|---|---|
-| GET | `/` | Dashboard |
-| GET | `/static/*` | UI assets |
-| GET | `/api/health` | `{ ok, service, mode: "public", persist_jobs: false, keys.{fetch,llm}, providers, model, daily_search }` — re-reads `.env` |
-| GET | `/api/feed` | Discovery hits (no `processed` flag) |
-| POST | `/api/discover` | `{ queries?, recency_minutes? }` → upsert feed. Needs a search-capable fetch provider. **6 / 10 min / IP** |
-| GET | `/api/estate/catalog` | Asset id/label list for the Environment checkboxes |
-| POST | `/api/pipeline` | `{ url, use_sample, markdown, title, assets[], hunt_days }`. Default **SSE**. `?stream=false` returns the final event as JSON. **8 / 10 min / IP** |
+| GET | `/` | Web console interface |
+| GET | `/static/*` | Static CSS and JavaScript assets |
+| GET | `/api/health` | Service health and provider configuration status (`{ ok, service, mode, persist_jobs, keys, providers, model, daily_search }`) |
+| GET | `/api/feed` | Cached discovery search hits from the local database |
+| POST | `/api/discover` | Trigger discovery search: `{ queries?, recency_minutes? }`. Requires a search-capable fetch provider (rate-limited: 6 requests / 10 min / IP) |
+| GET | `/api/estate/catalog` | Catalog of monitored asset identifiers and labels for the Environment view |
+| POST | `/api/pipeline` | Execute pipeline: `{ url, use_sample, markdown, title, assets[], hunt_days }`. Default response is SSE; `?stream=false` returns the final record as JSON (rate-limited: 8 requests / 10 min / IP) |
 
-Removed in public v1 (404):
+### Inactive / Modular Endpoints (Return 404)
 
-- `GET /api/records`, `GET /api/records/{id}`
-- `GET` / `PUT /api/estate` (no server-side profile, no SIEM secrets)
-- deploy and webhook routes
+- `GET /api/records`, `GET /api/records/{id}` (pipeline runs are kept in client `sessionStorage`)
+- `GET` / `PUT /api/estate` (environment profile is maintained in client `localStorage`)
+- Direct SIEM deploy and webhook push endpoints
 
-`assets` must be catalog ids (max 40). `hunt_days` must be `30`, `60`, or `90` (else 90).
+Parameters:
+- `assets`: Array of asset IDs from `/api/estate/catalog` (maximum 40).
+- `hunt_days`: Integer look-back window (`30`, `60`, or `90`; defaults to `90`).
 
-### Pipeline SSE
+### Pipeline Server-Sent Events (SSE)
 
-`Content-Type: text/event-stream`. Each frame is `data: <json>\n\n`.
+`Content-Type: text/event-stream`. Each message adheres to the SSE standard: `data: <json>\n\n`.
 
-Progress:
-
+**Progress Event:**
 ```json
 { "event": "progress", "stage": "ingest|extract|validate|store", "message": "..." }
 ```
+*(The UI displays the final `store` stage as **Output**).*
 
-The UI stage tile `store` is labeled **Output**. The event name is unchanged so existing clients keep working.
-
-Success:
-
+**Completion Event:**
 ```json
-{ "event": "complete", "stage": "store", "message": "Pipeline complete.", "record": { } }
+{ "event": "complete", "stage": "store", "message": "Pipeline complete.", "record": { ... } }
 ```
 
-Failure:
-
+**Error Event:**
 ```json
 { "event": "error", "stage": "error", "message": "..." }
 ```
 
-The worker thread is a daemon. The UI maps `stage` onto the four header tiles.
+### Client Console Views
 
-Deep links: `/?record=<id>` loads a record from **this tab's** sessionStorage; `/?view=archive` opens Archive; `/?view=estate` opens Environment.
-
-Console views:
-
-| View (`data-view`) | Screen label | Purpose |
+| View Identifier (`data-view`) | Interface Label | Purpose |
 |---|---|---|
-| `pipeline` | Pipeline | Ingest → extract → validate → output |
-| `archive` | Archive | This-tab sessionStorage, optional stack-match filter |
-| `estate` | Environment | Asset checkboxes + hunt window in localStorage |
+| `pipeline` | Pipeline | Ingest advisories, view extracted threat intel, and copy detections |
+| `archive` | Archive | Current session history (`sessionStorage`), with stack-match filtering |
+| `estate` | Environment | Monitored asset checkboxes and default retro-hunt duration (`localStorage`) |
 
-Detection tabs: `yaml`, `splunk`, `elastic`, `kql`, `wazuh`, `lc`, `hunt`, `atomic`. Copy / download only.
+Detection tabs: `yaml` (Sigma), `splunk`, `elastic`, `kql`, `wazuh`, `lc` (LimaCharlie), `hunt` (Retro-hunt), and `atomic` (Atomic test).
 
-## Stage 1 — ingest
+## Pipeline Stages in Detail
 
-`normalize_advisory_url()` accepts a bare URL, `<url>`, `[title](url)`, or a garbled markdown paste (`url](url`). The first `https://` token is kept; junk after `](` is dropped.
+### Stage 1 — Ingest
 
-If `CVE2DETECT_FETCH_PROVIDER=http` (or no fetch key), ingest GETs the URL with httpx and converts HTML to Markdown. JavaScript-heavy pages may be empty — paste Markdown or use a JS-capable fetch API.
+- `normalize_advisory_url()` accepts standard URLs, Markdown links (`[title](url)`), angled URLs (`<url>`), or malformed clipboard pastes. It isolates the primary HTTP/HTTPS target.
+- **HTTP Fetch:** When `CVE2DETECT_FETCH_PROVIDER=http` (or when no fetch API key is provided), the module issues an `httpx` GET request and converts the HTML DOM into Markdown. JavaScript-heavy single-page applications may produce incomplete content; in such cases, users can paste Markdown directly.
+- **Advanced Render / Search Provider:** Using a provider adhering to the `tinyfish` API contract, the module submits:
+  - `format: markdown`, `ttl: 0`, `per_url_timeout_ms: 90000`
+  - `exclude_selectors`: Navigation bars, cookie consent banners, footers, advertisements, and comments.
+  - `include_selectors`: `article`, `main`, `.post-content`, `.entry-content`, etc.
+  - Automatically falls back to broader selectors if initial targets fail, or invokes an agent profile if bot detection is encountered.
+- **Discovery Feeds:** Default discovery queries run against security research topics (exploits, zero-days, PoCs, and incident command lines). Results are saved to the `feed` table. When `CVE2DETECT_DAILY_SEARCH=1`, an APScheduler job triggers discovery every 24 hours.
 
-A search/render provider (`tinyfish` contract, hosts overridable via `FETCH_*_URL`) posts:
+### Stage 2 — Extract
 
-- `format: markdown`, `ttl: 0` (live), `per_url_timeout_ms: 90000`
-- `exclude_selectors`: cookie banners, nav, footer, ads, comments
-- `include_selectors`: `article`, `main`, `.post-content`, `.entry-content`, …
+- **Prompting & Grounding:** Uses a Senior Threat Analyst persona with strict instructions to ground detections strictly in the advisory text, prioritizing observable OS telemetry (process execution, command lines, parent processes) over transient indicators, and utilizing standard Sigma logsource naming.
+- **Provider Routing:**
+  - `gemini`: Uses the Google Generative Language API with strict schema validation (`responseJsonSchema`, falling back to `responseSchema` if needed).
+  - `openai` / `openai_compatible`: Dispatches to `{LLM_API_BASE}/chat/completions` using `response_format.json_schema` (strict mode), falling back to `json_object` if strict mode is unsupported.
+- `make_strict_schema(IntelExtraction)` enforces `additionalProperties: false` across all objects and marks all schema fields as required.
+- Long write-ups are safely truncated at 80,000 characters before LLM submission.
+- When `use_sample=true`, the pipeline bypasses external LLM calls and loads `samples/extraction.json` for deterministic offline testing.
 
-If `selector_not_matched`, retry without include selectors. If `bot_blocked`, POST Agent with `browser_profile: stealth` and output schema `{ title, markdown }`.
+### Stage 3 — Validate & Transpile
 
-Discovery queries (default, 1440 minute recency, social domains excluded):
+- `build_sigma_yaml()` maps extracted detection blocks into formal Sigma structures, sanitizes identifiers, validates condition syntax, and generates ordered YAML.
+- **Rule Status:** The builder enforces `status: experimental` on all generated Sigma rules to ensure human review before operational deployment.
+- **Validation Steps:**
+  1. `yaml.safe_load` verification.
+  2. Structural check for required keys (`title`, `logsource`, `detection.condition`, and at least one selection block).
+  3. Parsing via pySigma: `SigmaRule.from_yaml`.
+  4. Backend transpilation:
+     - **Splunk:** `SplunkBackend` with `splunk_windows_pipeline`.
+     - **Elastic:** `LuceneBackend` (`dsl_lucene`).
+     - **Sentinel:** `KustoBackend` with `sentinel_asim_pipeline` or `microsoft_xdr_pipeline`.
+  5. Open-source query synthesis: Wazuh XML rules and LimaCharlie D&R rules (with `enabled: false`) are generated from the detection map.
+  6. Atomic tests rewrite any live C2 endpoints to RFC-reserved documentation ranges (`example.com` and `203.0.113.1`).
+  7. Retro-hunt queries wrap the transpiled vendor query with the selected time window (30, 60, or 90 days).
+- Transpiler warnings are captured in `record.warnings` without failing the overall run; only YAML or core pySigma syntax errors mark `sigma_valid = 0`.
+- Stack matching checks extracted `affected` technologies against the user's environment profile to indicate coverage relevance.
 
-- CVE vulnerability write-up exploit analysis
-- zero-day disclosure technical advisory
-- vulnerability disclosure proof of concept detection
-- incident report exploitation command line Sysmon
+### Stage 4 — Output
 
-Hits land in `feed` (deduped by URL). `CVE2DETECT_DAILY_SEARCH=1` starts APScheduler every 24 hours. Feed items returned to the browser omit `processed` so one user's run cannot mark a URL for everyone else.
+- The pipeline constructs an in-memory client record (`_client_record(payload)`) and streams it over the SSE connection.
+- No rule or extraction records are written to the database.
+- The web UI receives the payload and adds it to `sessionStorage` (`cve2detect.session.records`).
 
-## Stage 2 — extract
+## Storage & Database Model
 
-System prompt: Senior Threat Analyst / Detection Engineer. Grounding rules: no invented hashes/CVEs/event IDs; prefer OS telemetry over hashes; Sigma field names (`Image`, `CommandLine`, `ParentImage`, …).
+The local SQLite database (`data/cve2detect.db`) is configured with write-ahead logging (WAL) and thread-local connections.
 
-LLM routing (`pipeline/settings.py`):
+Active table:
+- `feed(url TEXT PRIMARY KEY, title TEXT, snippet TEXT, site_name TEXT, query TEXT, discovered_at TEXT, processed INTEGER)`
 
-- `gemini` — `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` with `x-goog-api-key`. Schema via `responseJsonSchema` (falls back to `responseSchema` on HTTP 400).
-- `openai` / `openai_compatible` — `POST {LLM_API_BASE}/chat/completions` with `Authorization: Bearer`. Prefers `response_format.json_schema` (strict); falls back to `json_object` on HTTP 400.
+*Note on Historical Tables:* Legacy tables (`records`, `records_fts`, `settings`) may exist in earlier database files, but the core application operates statelessly and does not read or write them.
 
-`make_strict_schema(IntelExtraction)` forces `additionalProperties: false` and `required = all properties`.
+## Rate Limiting
 
-Markdown is truncated at 80,000 characters.
+The application includes an in-process rate limiter utilizing sliding timestamp windows (`collections.deque`) keyed by client IP:
 
-If `use_sample=true`, `samples/extraction.json` is loaded instead of calling an LLM (so CI and Load sample stay deterministic).
-
-Top-level extraction fields: `summary`, `cve`, `cvss`, `vulnerability_type`, `threat_actor`, `campaign`, `affected[]`, `techniques[]`, `telemetry[]`, `process_anomalies[]`, `command_lines[]`, `paths[]`, `indicators[]`, nested `sigma` draft, `confidence`, `is_actionable`, `caveats`.
-
-## Stage 3 — validate / transpile
-
-`build_sigma_yaml()` does **not** dump the model’s free-form YAML. It maps `SelectionBlock`s to Sigma detection keys, sanitizes identifiers, synthesizes a condition if the model’s condition does not reference known selections, and emits ordered YAML (`title`, `id` UUID, `status`, `description`, `references`, `author`, `date`, `logsource`, `detection`, `falsepositives`, `level`, `tags`).
-
-Public v1 **forces** `status: experimental` regardless of the model draft.
-
-Validation:
-
-1. `yaml.safe_load`
-2. Require `title`, `logsource`, `detection.condition`, at least one selection
-3. `SigmaRule.from_yaml`
-4. Convert:
-   - Splunk: `SplunkBackend` + `splunk_windows_pipeline` when importable
-   - Elastic: `LuceneBackend` `dsl_lucene`, else default Lucene
-   - Sentinel: `KustoBackend` with `sentinel_asim_pipeline` or `microsoft_xdr_pipeline`
-
-Backend failures are **warnings**; they do not fail `sigma_valid`. Only YAML/pySigma errors set `sigma_valid = 0`.
-
-Wazuh XML and LimaCharlie D&R are built from the same detection map (`pipeline/ossiem.py`). LimaCharlie metadata keeps `enabled: false`. Atomic tests replace live C2 with TEST-NET-3 (`203.0.113.1`) and `example.com`. Retro-hunt wraps the vendor queries with a 30 / 60 / 90 day look-back from the request (or the browser profile).
-
-Stack matching (`pipeline/profile.py`) compares `intel.affected` plus summary text against the request `assets` list. An empty list ⇒ `stack_configured = 0` (no filter).
-
-## Stage 4 — output (not a shared store)
-
-`run_pipeline` yields `_client_record(payload)`: JSON columns decoded, a fresh `id`, no `save_record`. The browser calls `rememberRecord()` into `sessionStorage` key `cve2detect.session.records`.
-
-SQLite WAL, `check_same_thread=False`, thread-local connection. Public writes:
-
-- `feed(url PK, title, snippet, site_name, query, discovered_at, processed)` — `processed` is unused by the API
-
-The `records`, `records_fts`, and `settings` tables may still exist on disk from earlier local-tool builds. Public v1 does not read or write them from `app.py`.
-
-## Rate limits and proxy
-
-Sliding window in process memory (`deque` of timestamps), keyed by client IP + bucket.
-
-| Bucket | Max | Window |
+| Endpoint Bucket | Default Limit | Window |
 |---|---|---|
-| `pipeline` | 8 | 600 s |
-| `discover` | 6 | 600 s |
+| `pipeline` | 8 requests | 600 seconds (10 minutes) |
+| `discover` | 6 requests | 600 seconds (10 minutes) |
 
-`X-Forwarded-For` is ignored unless `CVE2DETECT_TRUST_PROXY=1`. Enable that only when the reverse proxy **overwrites** the header; otherwise clients could spoof IPs and skip the limit.
+When running behind a trusted reverse proxy, set `CVE2DETECT_TRUST_PROXY=1` to accurately identify client IPs from `X-Forwarded-For`.
 
-## Environment
+## Configuration Reference
 
-Loaded from `.env` at process start and **re-read** on health checks and provider calls (`load_dotenv(..., override=True)`).
+The application loads settings from `.env` on startup and refreshes them dynamically upon health check requests:
 
-| Variable | Purpose |
-|---|---|
-| `CVE2DETECT_FETCH_PROVIDER` | `http` or `tinyfish` (auto: `tinyfish` if a fetch key exists, else `http`) |
-| `FETCH_API_KEY` | Search/render fetch API. Alias: `TINYFISH_API_KEY` |
-| `FETCH_SEARCH_URL` / `FETCH_URL` / `FETCH_AGENT_URL` | Override TinyFish-shaped hosts |
-| `CVE2DETECT_LLM_PROVIDER` | `gemini`, `openai`, or `openai_compatible` (auto-detected from keys / base URL) |
-| `LLM_API_KEY` | LLM slot. Aliases: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY` |
-| `LLM_MODEL` | Model id. Aliases: `GEMINI_MODEL`, `OPENAI_MODEL` |
-| `LLM_API_BASE` | OpenAI-compatible base URL. Alias: `OPENAI_BASE_URL` |
-| `CVE2DETECT_HOST` / `CVE2DETECT_PORT` | Bind, default `127.0.0.1:8787` |
-| `CVE2DETECT_DAILY_SEARCH` | `1` enables 24h discovery job |
-| `CVE2DETECT_SEARCH_RECENCY_MINUTES` | Default `1440` |
-| `CVE2DETECT_TRUST_PROXY` | `1` to trust `X-Forwarded-For` behind a reverse proxy |
+| Variable | Default | Purpose |
+|---|---|---|
+| `CVE2DETECT_FETCH_PROVIDER` | auto | `http` or `tinyfish` (defaults to `tinyfish` if `FETCH_API_KEY` is present, else `http`) |
+| `FETCH_API_KEY` | None | API key for search and browser-render fetch services (alias: `TINYFISH_API_KEY`) |
+| `FETCH_SEARCH_URL` / `FETCH_URL` / `FETCH_AGENT_URL` | None | Overrides for fetch provider API endpoints |
+| `CVE2DETECT_LLM_PROVIDER` | auto | `gemini`, `openai`, or `openai_compatible` (detected from keys and base URL) |
+| `LLM_API_KEY` | None | LLM API key (aliases: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`) |
+| `LLM_MODEL` | None | LLM model identifier (aliases: `GEMINI_MODEL`, `OPENAI_MODEL`) |
+| `LLM_API_BASE` | None | Base URL for OpenAI-compatible gateways (alias: `OPENAI_BASE_URL`) |
+| `CVE2DETECT_HOST` | `127.0.0.1` | Network interface to bind |
+| `CVE2DETECT_PORT` | `8787` | Port to bind |
+| `CVE2DETECT_DAILY_SEARCH` | `0` | Set to `1` to enable scheduled 24h discovery searches |
+| `CVE2DETECT_SEARCH_RECENCY_MINUTES` | `1440` | Recency threshold for discovery searches (in minutes) |
+| `CVE2DETECT_TRUST_PROXY` | `0` | Set to `1` to trust `X-Forwarded-For` from reverse proxies |
 
-`.env` is gitignored. Keys never leave the server process; the browser only sees booleans from `/api/health`.
+## Deployment & Networking
 
-### Hosting a public instance
+1. **Local Deployment:** Running `python app.py` binds to `127.0.0.1:8787` by default, ensuring the service is accessible only on the local machine.
+2. **Network / Reverse Proxy Deployment:** To host the project for a team behind a reverse proxy (e.g., Nginx, Caddy, Traefik):
+   - Set `CVE2DETECT_HOST=0.0.0.0` or bind to an internal network interface.
+   - Terminate TLS at the reverse proxy.
+   - Configure the reverse proxy to overwrite the `X-Forwarded-For` header with the real remote client IP, and set `CVE2DETECT_TRUST_PROXY=1`.
+3. **Secret Isolation:** `.env` is gitignored by default. The `/api/health` endpoint exposes configuration status booleans (e.g., `keys.llm = true`), never revealing actual API tokens.
 
-1. Keep the default loopback bind, or set `CVE2DETECT_HOST=0.0.0.0` **behind TLS termination** that you control.
-2. Do not put SIEM URLs, API keys, or webhook secrets in `.env` or SQLite. Public v1 has no place for them.
-3. Set `CVE2DETECT_TRUST_PROXY=1` only if the proxy sets `X-Forwarded-For`.
-4. Treat `data/cve2detect.db` as a shared list of public article URLs, not as user data.
+## Testing
 
-`pipeline/deploy.py` and `pipeline/webhooks.py` remain in the tree for private forks. They are not imported by `app.py` and must stay that way on a public host.
+Execute the test suite with pytest:
 
-## Tests
-
-```
+```bash
 pytest -q
 ```
 
-Coverage: URL sanitizer, extraction schema, Sigma YAML + pySigma parse of the sample (`status: experimental`), store/FTS unit tests, public HTTP surface (`mode=public`, `persist_jobs=false`, sample pipeline, 404 on records/estate/deploy/webhooks).
+Test coverage includes:
+- Advisory URL parsing and sanitization
+- `IntelExtraction` Pydantic schema validation
+- Sigma YAML assembly and pySigma compilation using sample fixtures
+- SQLite store operations
+- Public HTTP routes and health checks (verifying stateless operation and sample pipeline execution)
 
-Live fetch/LLM calls are not in CI. Sample pipeline does not call an LLM.
+## Operational Limitations
 
-## Limitations
+- **Extraction Quality:** LLM extraction accuracy depends on the detail present in the source advisory. The extracted `confidence` score and `caveats` section provide guidance on whether manual refinement is needed.
+- **Field Mapping:** Sigma field naming adheres to standard Sysmon / Windows event conventions. Transpiler backends map standard fields to vendor targets; unmapped custom fields may require manual SIEM query adjustment.
+- **In-Memory Rate Limiting:** Built-in rate limits are maintained in process memory and reset when the server restarts.
+- **Session-Bound History:** Archive items are stored in client `sessionStorage` and clear when the browser tab is closed. Use the download button to save Sigma rules locally.
 
-- LLM extraction can omit or invent telemetry if the write-up is thin; `confidence` and `caveats` exist so an analyst can reject the rule.
-- Sigma field names follow the generic Sysmon/Windows vocabulary. Pipelines remap some of them; unmapped fields yield empty or odd vendor queries.
-- Stealth Agent is paid and still cannot solve CAPTCHAs.
-- In-process rate limits reset on process restart and do not sync across workers. Use one worker or put a limiter in the proxy for multi-process hosting.
-- A `validated` stamp means **syntactically valid Sigma**, not a tested detection. Tune false positives before enabling anything in a SIEM.
-- Session archive is lost when the tab closes. Download YAML you need to keep.
+## Design & Security Invariants
 
-## Safety invariants
-
-- Default bind `127.0.0.1`
-- API keys stay server-side
-- No SIEM credentials collected or stored
-- No shared job archive
-- Third-party page retrieval goes through the configured fetch provider (or a single httpx GET when `http`)
-- Sample path does not call a fetch API or an LLM
-- Generated Sigma `status` is always `experimental`
-- Atomic tests rewrite live C2 to documentation ranges
+- **Default Loopback Binding:** Binds to `127.0.0.1` unless explicitly reconfigured.
+- **No Ingestion of SIEM Credentials:** The application does not store or prompt for SIEM access credentials.
+- **Stateless Pipeline Data:** Advisories and generated rules are not persisted in the database.
+- **Safe Staging Commands:** Atomic test commands sanitize remote C2 IPs and domains to reserved test documentation values.
+- **Standardized Rule Status:** Generated Sigma rules are strictly marked `status: experimental`.

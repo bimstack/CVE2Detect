@@ -1,3 +1,5 @@
+"""LLM retry on 503 then next model; auth errors must not failover."""
+
 from __future__ import annotations
 
 from pipeline.extract import ExtractError, LlmHttpError, extract_intel, load_sample_extraction

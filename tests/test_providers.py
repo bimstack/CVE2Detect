@@ -1,3 +1,5 @@
+"""Fetch/LLM provider resolution and HTML-to-Markdown for the http ingest path."""
+
 from __future__ import annotations
 
 from pipeline.ingest import html_to_markdown

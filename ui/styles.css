@@ -1,3 +1,5 @@
+/* CVE2Detect console styles. Desktop: 300px feed + workspace. ≤1100px: feed drawer
+   and Intel/Detections panes. ≤720px: feed as a bottom sheet + sticky dock. */
 :root {
   --bg: #090b08;
   --bg-2: #10140f;

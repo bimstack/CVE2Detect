@@ -1,4 +1,8 @@
-"""Stage 3 — YAML + pySigma validation and SIEM transpilation."""
+"""Stage 3 — YAML + pySigma validation and SIEM transpilation.
+
+A rule is `sigma_valid` only if YAML and pySigma parse succeed. Splunk / Elastic
+/ Sentinel backend failures are warnings and do not fail the run.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ ProgressFn = Callable[[str, str], None]
 
 @dataclass
 class ValidationResult:
+    """Parse outcome plus whatever vendor queries could be compiled."""
     yaml_ok: bool
     sigma_ok: bool
     errors: list[str] = field(default_factory=list)
@@ -55,6 +60,7 @@ def validate_and_transpile(
     sigma_yaml: str,
     progress: ProgressFn | None = None,
 ) -> ValidationResult:
+    """Parse Sigma YAML, then best-effort transpile to SPL / DSL / KQL."""
     result = ValidationResult(yaml_ok=False, sigma_ok=False)
     try:
         loaded = yaml.safe_load(sigma_yaml)

@@ -1,3 +1,5 @@
+"""HTTP surface: health, static pages, sample pipeline, no records/deploy routes."""
+
 from __future__ import annotations
 
 from fastapi.testclient import TestClient

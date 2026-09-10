@@ -1,4 +1,8 @@
-"""Push a generated rule to a SIEM as disabled / testing."""
+"""Optional SIEM deploy helpers (disabled / testing only).
+
+Not imported by app.py. Kept for private forks that want to push a disabled
+rule to Wazuh, Elastic, Sentinel, or LimaCharlie.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Historical retro-hunt wrappers (30 / 90 day lookback)."""
+"""Wrap compiled SIEM queries in a 30 / 60 / 90 day look-back window."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any
 
 
 def _elastic_with_range(query: str, days: int) -> str:
+    """Add an @timestamp range. JSON DSL if the query is JSON, else Lucene AND."""
     text = (query or "").strip()
     if not text:
         return ""
@@ -43,6 +44,7 @@ def build_retro_hunts(
     sentinel_kql: str = "",
     windows: int = 90,
 ) -> dict[str, str]:
+    """Return `{splunk, elastic, sentinel, note}` for the hunt tab."""
     days = 90 if windows not in (30, 60, 90) else windows
     hunts: dict[str, str] = {}
     if splunk_spl.strip():

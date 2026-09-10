@@ -1,7 +1,8 @@
 """Resolve fetch and LLM providers from the environment.
 
-Prefer generic names (`FETCH_*`, `LLM_*`). Vendor-specific aliases still
-work so an existing `.env` keeps running without edits.
+Prefer generic names (`FETCH_*`, `LLM_*`). Vendor aliases (`TINYFISH_*`,
+`GEMINI_*`, `OPENAI_*`, `XAI_*`) still work so an existing `.env` needs no edit.
+Dotenv is re-read on each call so saving `.env` takes effect without a restart.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ def reload_env() -> None:
 
 
 def fetch_provider() -> str:
+    """`http` or `tinyfish`. Auto: tinyfish when a fetch key exists, else http."""
     reload_env()
     raw = (
         os.environ.get("CVE2DETECT_FETCH_PROVIDER")
@@ -79,6 +81,7 @@ def search_ready() -> bool:
 
 
 def llm_provider() -> str:
+    """`gemini`, `openai`, or `openai_compatible`, from env or inferred from keys."""
     reload_env()
     raw = (
         os.environ.get("CVE2DETECT_LLM_PROVIDER")

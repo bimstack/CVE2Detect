@@ -1,3 +1,5 @@
+"""Stack matching, CVSS parse, Wazuh/LimaCharlie, atomic sanitization, retro-hunt."""
+
 from __future__ import annotations
 
 from pipeline.atomic import TEST_IP, TEST_URL, generate_atomic_tests

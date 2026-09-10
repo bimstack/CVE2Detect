@@ -1,4 +1,7 @@
-"""Slack, Microsoft Teams, and Discord incoming webhooks."""
+"""Slack / Teams / Discord webhook helpers.
+
+Not imported by app.py. Host allowlist only; unused in the local project console.
+"""
 
 from __future__ import annotations
 
@@ -90,6 +93,7 @@ def post_webhooks(
     record: dict[str, Any],
     match: dict[str, Any],
 ) -> list[dict[str, str]]:
+    """POST to Slack/Teams/Discord if the URL host is on the allowlist."""
     results: list[dict[str, str]] = []
     mapping = {
         "slack": (_slack_payload, urls.get("slack") or ""),
@@ -129,6 +133,7 @@ def should_notify(
     min_cvss: float = 8.0,
     only_matches: bool = True,
 ) -> bool:
+    """True when CVSS is high enough and (optionally) the stack matched."""
     if cvss is None or cvss < min_cvss:
         return False
     if only_matches:

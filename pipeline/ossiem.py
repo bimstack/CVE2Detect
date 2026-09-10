@@ -1,4 +1,7 @@
-"""Open-source SIEM transpilers: Wazuh XML and LimaCharlie D&R YAML."""
+"""Wazuh XML and LimaCharlie D&R YAML built from Sigma detection selections.
+
+These are copy-paste drafts. LimaCharlie metadata keeps `enabled: false`.
+"""
 
 from __future__ import annotations
 
@@ -73,6 +76,7 @@ def build_wazuh_xml(
     seed: str,
     level: str = "high",
 ) -> str:
+    """local_rules-style XML. Rule id is a stable hash of `seed` in the 100000 range."""
     wazuh_level = {"informational": 3, "low": 5, "medium": 7, "high": 10, "critical": 12}.get(
         (level or "high").lower(), 10
     )
@@ -139,6 +143,7 @@ def build_limacharlie_yaml(
     detection: dict[str, Any],
     seed: str,
 ) -> str:
+    """D&R YAML with metadata.enabled = false."""
     rules: list[dict[str, Any]] = []
     for block in _selections(detection).values():
         for field, modifier, values in _field_values(block):

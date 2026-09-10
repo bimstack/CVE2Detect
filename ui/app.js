@@ -1,3 +1,11 @@
+/**
+ * CVE2Detect console.
+ *
+ * Views: Pipeline (ingest/extract/validate/output), Archive (this tab only),
+ * Environment (localStorage stack + hunt window).
+ * On phones/tablets the discovery feed is a drawer and Intel/Detections are panes.
+ * Pipeline results stay in sessionStorage — they are never written to the server.
+ */
 const state = {
   record: null,
   tab: "yaml",
@@ -20,8 +28,8 @@ const TAB_HINTS = {
   atomic: "Staging-only. C2 IPs and URLs are replaced with example.com / TEST-NET-3.",
 };
 
-const PROFILE_KEY = "cve2detect.profile";
-const SESSION_KEY = "cve2detect.session.records";
+const PROFILE_KEY = "cve2detect.profile"; // localStorage — stack + hunt window
+const SESSION_KEY = "cve2detect.session.records"; // this tab's archive (max 40)
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,6 +54,7 @@ function sessionRecords() {
 }
 
 function rememberRecord(record) {
+  // Newest first; cap so sessionStorage cannot grow without bound.
   if (!record || !record.id) return;
   const list = sessionRecords().filter((r) => r.id !== record.id);
   list.unshift(record);
@@ -83,6 +92,7 @@ function setTabHint() {
 }
 
 function setStage(name, kind) {
+  // Mark the active stage and everything before it as done (or error).
   document.querySelectorAll(".stage").forEach((el) => {
     const stage = el.dataset.stage;
     el.classList.remove("active", "done", "error");
@@ -280,6 +290,7 @@ function normalizeUrl(raw) {
 }
 
 async function runPipeline({ url = "", useSample = false, markdown = "" } = {}) {
+  // POST /api/pipeline as SSE and apply each `data:` frame to the stage tiles.
   if (state.running) return;
   state.running = true;
   $("btn-run").disabled = true;
@@ -349,6 +360,7 @@ function isNarrow() {
 }
 
 function openRail() {
+  // Tablet: left drawer. Phone: bottom sheet. Desktop ignores these classes.
   document.body.classList.add("rail-open");
   if ($("btn-open-rail")) $("btn-open-rail").setAttribute("aria-expanded", "true");
   if ($("backdrop")) $("backdrop").hidden = false;
@@ -361,6 +373,7 @@ function closeRail() {
 }
 
 function setPane(pane) {
+  // Phone/tablet: show Intel or Detections, not both.
   state.pane = pane === "output" ? "output" : "intel";
   if ($("split")) {
     $("split").classList.toggle("show-intel", state.pane === "intel");
@@ -372,6 +385,7 @@ function setPane(pane) {
 }
 
 function switchView(view) {
+  // Header nav and the mobile dock both use data-view.
   state.view = view;
   document.querySelectorAll("[data-view]").forEach((btn) => {
     btn.classList.toggle("on", btn.dataset.view === view);

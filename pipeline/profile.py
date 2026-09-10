@@ -1,4 +1,8 @@
-"""Environment profile catalog and affected-software matching."""
+"""Environment catalog and stack matching.
+
+ASSET_CATALOG ids are what the Environment checkboxes send on Run pipeline.
+Matching is alias search over extracted vendor/product text plus the summary.
+"""
 
 from __future__ import annotations
 
@@ -178,7 +182,7 @@ def match_stack(
     asset_ids: list[str],
     extra_text: str = "",
 ) -> dict[str, Any]:
-    """Return whether extracted products overlap the configured estate."""
+    """Whether extracted software overlaps the selected catalog ids."""
     selected = [i for i in asset_ids if i in catalog_by_id()]
     if not selected:
         return {
@@ -210,6 +214,7 @@ def match_stack(
 
 
 def parse_cvss(value: str) -> float | None:
+    """First float in a CVSS string (`9.8`, `CVSS:3.1/AV:N/... 9.8`), else None."""
     text = (value or "").strip()
     if not text:
         return None

@@ -1,8 +1,7 @@
 """SQLite persistence.
 
-Public v1 uses this module for the shared discovery feed only.
-Job records, estate profiles, and SIEM credentials are not written by the
-HTTP layer; `save_record` / `save_profile` remain for tests and local forks.
+The HTTP layer writes the discovery `feed` table only. `save_record` and
+profile helpers remain for tests and private forks — `app.py` does not call them.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ _local = threading.local()
 
 
 def db_path() -> Path:
+    """`data/cve2detect.db`, renaming a leftover `autozday.db` on first run."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not DB_PATH.exists() and _LEGACY_DB.exists():
         _LEGACY_DB.rename(DB_PATH)
@@ -58,6 +58,7 @@ def connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    """Create feed/records/settings tables and add any missing columns."""
     conn = connect()
     conn.executescript(
         """
@@ -153,6 +154,7 @@ def init_db() -> None:
 
 
 def upsert_feed(hits: list[Any]) -> int:
+    """Insert or refresh discovery hits by URL. Returns sqlite rowcount sum."""
     conn = connect()
     inserted = 0
     for hit in hits:
@@ -205,6 +207,7 @@ def _fts_blob(record: dict[str, Any]) -> tuple[str, str]:
 
 
 def save_record(payload: dict[str, Any]) -> dict[str, Any]:
+    """Upsert a full pipeline record. Unused by the HTTP app; kept for tests."""
     conn = connect()
     record_id = payload.get("id") or uuid.uuid4().hex[:12]
     payload["id"] = record_id

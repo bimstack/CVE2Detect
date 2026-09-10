@@ -1,4 +1,10 @@
-"""Stage 2 — LLM extraction of telemetry and Sigma draft fields."""
+"""Stage 2 — LLM extraction of telemetry and Sigma draft fields.
+
+Sends advisory Markdown to the configured LLM (Gemini native API or any
+OpenAI-compatible /v1/chat/completions host) and validates the JSON against
+`IntelExtraction`. On 429/503 the same model is retried, then the next id in
+`LLM_MODELS`. Sample runs load `samples/extraction.json` and skip the network.
+"""
 
 from __future__ import annotations
 
@@ -43,6 +49,7 @@ def _sleep(seconds: float) -> None:
 
 
 def _raise_http(status: int, body: str, model: str) -> None:
+    """Map HTTP status to retry / skip-model / hard-fail."""
     snippet = (body or "")[:400]
     if status in (401, 403):
         raise LlmHttpError(
@@ -74,6 +81,7 @@ def _raise_http(status: int, body: str, model: str) -> None:
 
 
 def load_sample_extraction() -> IntelExtraction:
+    """Offline fixture used by Load sample and CI."""
     raw = json.loads(SAMPLE_EXTRACTION.read_text(encoding="utf-8"))
     return IntelExtraction.model_validate(raw)
 
@@ -118,6 +126,7 @@ def _gemini_response_text(payload: dict[str, Any]) -> str:
 
 
 def _extract_gemini(markdown: str, source_url: str, title: str, key: str, model: str) -> IntelExtraction:
+    """Google generateContent with responseJsonSchema (falls back to responseSchema)."""
     schema = _json_schema()
     body = {
         "systemInstruction": {"parts": [{"text": ANALYST_SYSTEM_PROMPT}]},
@@ -169,6 +178,7 @@ def _extract_gemini(markdown: str, source_url: str, title: str, key: str, model:
 
 
 def _extract_openai(markdown: str, source_url: str, title: str, key: str, model: str, base: str) -> IntelExtraction:
+    """OpenAI-style chat.completions; prefers json_schema, then json_object."""
     if not base:
         raise ExtractError(
             "LLM_API_BASE is required for OpenAI-compatible providers "
@@ -268,6 +278,7 @@ def extract_intel(
     use_sample_fallback: bool = False,
     progress: ProgressFn | None = None,
 ) -> IntelExtraction:
+    """Return structured intel, retrying busy models then falling back."""
     text = (markdown or "").strip()
     if not text:
         raise ExtractError("No advisory Markdown to analyze.")
@@ -290,6 +301,8 @@ def extract_intel(
     provider = llm_provider()
     models = llm_models()
     last_err: Exception | None = None
+    # Try each model up to ATTEMPTS_PER_MODEL times. Capacity errors retry;
+    # 404 skips to the next model; 401/403 abort (the key is wrong).
     for index, model in enumerate(models):
         for attempt in range(1, ATTEMPTS_PER_MODEL + 1):
             label = f"LLM ({provider} / {model})"

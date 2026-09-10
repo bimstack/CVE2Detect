@@ -1,3 +1,5 @@
+"""URL sanitizer, extraction schema, Sigma YAML, pySigma, and SQLite FTS."""
+
 from __future__ import annotations
 
 import json

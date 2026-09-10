@@ -1,4 +1,8 @@
-"""Structured extraction schema and event types for the four pipeline stages."""
+"""Pydantic models for LLM structured output (IntelExtraction).
+
+`make_strict_schema` forces additionalProperties=false and required=all
+properties so Gemini / OpenAI json_schema mode cannot invent extra keys.
+"""
 
 from __future__ import annotations
 
@@ -114,7 +118,7 @@ class IntelExtraction(StrictModel):
 
 
 def make_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """Force additionalProperties:false and required=all properties for xAI structured output."""
+    """JSON Schema with additionalProperties:false and every property required."""
     schema = model.model_json_schema()
 
     def walk(node: Any) -> None:

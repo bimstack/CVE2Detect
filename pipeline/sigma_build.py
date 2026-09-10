@@ -1,4 +1,8 @@
-"""Assemble Sigma YAML from structured extraction fields."""
+"""Assemble Sigma YAML from structured extraction fields.
+
+Does not dump the LLM's free-form YAML. Selection names are sanitized, a
+condition is synthesized if needed, and `status` is always `experimental`.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,8 @@ _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 class LiteralStr(str):
+    """String dumped as a YAML literal block when it contains newlines."""
+
     pass
 
 
@@ -27,6 +33,7 @@ yaml.add_representer(LiteralStr, _literal_representer)
 
 
 def _ident(name: str, fallback: str) -> str:
+    """Sigma selection names: letters, digits, underscore; cannot start with a digit."""
     cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip())
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     if not cleaned:
@@ -88,6 +95,7 @@ def _tag_list(intel: IntelExtraction) -> list[str]:
 
 
 def build_sigma_document(intel: IntelExtraction, references: list[str]) -> dict[str, Any]:
+    """Map IntelExtraction.sigma selections onto a Sigma rule dict."""
     draft: SigmaDraft = intel.sigma
     used: set[str] = {"condition"}
     detection: dict[str, Any] = {}
@@ -141,7 +149,7 @@ def build_sigma_document(intel: IntelExtraction, references: list[str]) -> dict[
     if not logsource:
         logsource = {"category": "process_creation", "product": "windows"}
 
-    # Public v1 always emits draft rules. Analysts promote status after hunting.
+    # Always draft. Analysts promote status after hunting in their own SIEM.
     status = "experimental"
     level = (draft.level or "medium").strip().lower()
     if level not in {"informational", "low", "medium", "high", "critical"}:

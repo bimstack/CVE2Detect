@@ -1,4 +1,12 @@
-"""Stage 1 — fetch an advisory to Markdown (pluggable fetch provider)."""
+"""Stage 1 — turn an advisory URL into clean Markdown.
+
+Providers:
+  * `http` — GET the page with httpx (no JS render, no API key).
+  * `tinyfish` (or any API with the same Search/Fetch/Agent contract) — JS
+    render plus 24h discovery. Hosts can be overridden with FETCH_*_URL.
+
+Pasted Markdown and the bundled sample skip this module's network calls.
+"""
 
 from __future__ import annotations
 
@@ -84,6 +92,7 @@ class IngestError(RuntimeError):
 
 @dataclass
 class SearchHit:
+    """One discovery-feed article (title + URL)."""
     url: str
     title: str
     snippet: str
@@ -95,6 +104,7 @@ class SearchHit:
 
 @dataclass
 class FetchedAdvisory:
+    """Markdown plus fetch metadata after ingest."""
     url: str
     final_url: str
     title: str
@@ -138,7 +148,10 @@ def _site_name(url: str) -> str:
 
 
 def normalize_advisory_url(raw: str) -> str:
-    """Accept a pasted URL, markdown link, or wrapped URL and return a clean http(s) URL."""
+    """Accept a pasted URL, markdown link, or wrapped URL and return a clean http(s) URL.
+
+    People often paste `[title](https://…)` from a write-up; we keep the first https URL.
+    """
     text = (raw or "").strip()
     if not text:
         raise IngestError("URL is empty")
@@ -335,7 +348,7 @@ _WS_RE = re.compile(r"\n{3,}")
 
 
 def html_to_markdown(html: str) -> str:
-    """Best-effort HTML → Markdown for the direct HTTP fetch provider."""
+    """Strip chrome (nav/script/style) and keep headings/paragraphs as Markdown-ish text."""
     text = _SCRIPT_RE.sub(" ", html or "")
     text = _BR_RE.sub("\n", text)
     text = _HEADING_RE.sub(lambda m: "\n" + ("#" * int(m.group(1))) + " ", text)
@@ -389,7 +402,7 @@ def _http_fetch(url: str, progress: ProgressFn | None) -> FetchedAdvisory:
 
 
 def fetch_advisory(url: str, progress: ProgressFn | None = None) -> FetchedAdvisory:
-    """Fetch a URL to Markdown via the configured provider."""
+    """Fetch a URL to Markdown via `http` or the configured search/render API."""
     url = normalize_advisory_url(url)
     if fetch_provider() == "http":
         return _http_fetch(url, progress)

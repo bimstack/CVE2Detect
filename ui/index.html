@@ -13,8 +13,10 @@
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
+  <!-- Grain overlay is visual only (pointer-events: none). -->
   <div class="grain" aria-hidden="true"></div>
   <button type="button" class="backdrop" id="backdrop" hidden aria-label="Close discovery feed"></button>
+  <!-- Discovery feed: left column on desktop, drawer/sheet on smaller screens. -->
   <aside class="rail" id="rail">
     <div class="rail-head">
       <span class="kicker">Discovery feed</span>
@@ -54,6 +56,7 @@
       </div>
     </header>
 
+    <!-- Four pipeline tiles. JS toggles .active / .done / .error from SSE stages. -->
     <section class="stages" id="stages" aria-label="Pipeline stages">
       <div class="stage" data-stage="ingest">
         <span class="stage-num">01</span>
@@ -173,6 +176,7 @@
       </div>
     </section>
 
+    <!-- Phone/tablet bottom nav (hidden on desktop). Same data-view as the header. -->
     <nav class="dock" aria-label="Primary">
       <button type="button" class="on" data-view="pipeline">Pipeline</button>
       <button type="button" data-view="archive">Archive</button>

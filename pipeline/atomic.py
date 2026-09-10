@@ -1,4 +1,8 @@
-"""Safe Atomic Red Team-style verification snippets for staging hosts."""
+"""Safe Atomic Red Team-style snippets for a staging host.
+
+Live C2 IPs/URLs/hashes from the advisory are rewritten to example.com and
+TEST-NET-3 so the text is not a working implant. Run only in isolation.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ _HASH = re.compile(r"\b[a-fA-F0-9]{32,64}\b")
 
 
 def _sanitize(command: str, windows: bool) -> str:
+    """Replace IPs, URLs, hashes, and Windows paths with documentation stand-ins."""
     text = command
     text = _URL.sub(TEST_URL, text)
     text = _IP.sub(TEST_IP, text)
@@ -39,6 +44,7 @@ def generate_atomic_tests(
     process_anomalies: list[Any],
     logsource_product: str = "",
 ) -> list[dict[str, str]]:
+    """Build Invoke-AtomicTest plus sanitized command replay (max 6 items)."""
     windows = _windows(logsource_product, logsource_product)
     tests: list[dict[str, str]] = []
 

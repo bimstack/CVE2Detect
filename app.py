@@ -1,4 +1,11 @@
-"""CVE2Detect — local threat-intel-to-Sigma project."""
+"""CVE2Detect HTTP entry point.
+
+FastAPI app that serves the local console and the generate-and-copy pipeline.
+Jobs are streamed over SSE and are not written to SQLite. SQLite only caches
+the shared discovery feed.
+
+Start with `python app.py` (binds 127.0.0.1:8787 by default).
+"""
 
 from __future__ import annotations
 
@@ -41,11 +48,15 @@ _rate: dict[str, deque[float]] = defaultdict(deque)
 
 
 class DiscoverRequest(BaseModel):
+    """Optional override of the default 24h search queries."""
+
     queries: list[str] = Field(default_factory=list)
     recency_minutes: int | None = None
 
 
 class PipelineRequest(BaseModel):
+    """One pipeline run: URL, pasted Markdown, or the bundled sample."""
+
     url: str = Field(default="", max_length=2048)
     use_sample: bool = False
     markdown: str = Field(default="", max_length=120_000)
@@ -77,6 +88,7 @@ def _public_feed_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rate_limit(request: Request, bucket: str, max_n: int, window_s: float) -> None:
+    """Reject the request with 429 when this IP has used up `max_n` in `window_s`."""
     now = time.time()
     key = f"{_client_ip(request)}:{bucket}"
     q = _rate[key]
@@ -100,6 +112,7 @@ def _keys() -> dict[str, bool]:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    """Booleans for Fetch/LLM plus the active model list. Never returns API keys."""
     load_dotenv(ROOT / ".env", override=True)
     status = provider_status()
     return {
@@ -120,11 +133,13 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/feed")
 def feed(limit: int = Query(80, ge=1, le=200)) -> dict[str, Any]:
+    """Cached discovery hits (titles/URLs only)."""
     return {"items": [_public_feed_item(item) for item in list_feed(limit)]}
 
 
 @app.post("/api/discover")
 def api_discover(request: Request, body: DiscoverRequest) -> dict[str, Any]:
+    """Run search queries and upsert the feed. Needs a search-capable fetch provider."""
     _rate_limit(request, "discover", max_n=6, window_s=600)
     if not search_ready():
         raise HTTPException(
@@ -145,6 +160,10 @@ def api_discover(request: Request, body: DiscoverRequest) -> dict[str, Any]:
 
 @app.post("/api/pipeline")
 def api_pipeline(request: Request, body: PipelineRequest, stream: bool = True) -> Any:
+    """Run ingest → extract → validate → output.
+
+    Default is Server-Sent Events. Pass `?stream=false` to wait for the final JSON event.
+    """
     _rate_limit(request, "pipeline", max_n=8, window_s=600)
     if not body.use_sample and not body.url.strip() and not body.markdown.strip():
         raise HTTPException(
@@ -162,6 +181,7 @@ def api_pipeline(request: Request, body: PipelineRequest, stream: bool = True) -
         "assets": assets,
         "hunt_days": hunt_days,
     }
+    # Non-streaming path is for tests and scripts; the console uses SSE.
     if not stream:
         final: dict[str, Any] | None = None
         for event in run_pipeline(**kwargs):
@@ -172,6 +192,7 @@ def api_pipeline(request: Request, body: PipelineRequest, stream: bool = True) -
             raise HTTPException(status_code=502, detail=final.get("message"))
         return final
 
+    # Pipeline work runs on a daemon thread so the SSE generator can yield as events arrive.
     queue: Queue[dict[str, Any] | None] = Queue()
 
     def worker() -> None:
@@ -207,6 +228,7 @@ app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 
 def _start_scheduler() -> None:
+    """Optional 24h discovery refresh. Off unless CVE2DETECT_DAILY_SEARCH=1."""
     if os.environ.get("CVE2DETECT_DAILY_SEARCH", "0") != "1":
         return
     if not search_ready():

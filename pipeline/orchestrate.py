@@ -1,4 +1,8 @@
-"""Run the four-stage pipeline and emit progress events."""
+"""Run the four-stage pipeline and emit progress events.
+
+Stages: ingest → extract → validate → output. Each step yields an SSE-friendly
+dict. The final `complete` event carries the record; nothing is written to SQLite.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ SAMPLE_URL = "https://cve2detect.local/samples/iis-rce-cobalt-thread"
 
 
 def _event(stage: str, message: str, **extra: Any) -> dict[str, Any]:
+    """Progress frame the UI maps onto the four stage tiles."""
     payload = {"event": "progress", "stage": stage, "message": message}
     payload.update(extra)
     return payload
@@ -37,6 +42,7 @@ def _record_from_parts(
     sigma_yaml: str,
     validation: Any,
 ) -> dict[str, Any]:
+    """Flatten extraction + validation into the SQLite-shaped payload (not saved)."""
     return {
         "url": advisory.final_url or advisory.url,
         "title": intel.sigma.title or advisory.title,
@@ -84,7 +90,7 @@ def _record_from_parts(
 
 
 def _client_record(payload: dict[str, Any]) -> dict[str, Any]:
-    """Shape a pipeline payload for the browser without writing a shared database."""
+    """Decode `*_json` columns and assign an id. Used by the browser, not SQLite."""
     payload = dict(payload)
     payload["id"] = payload.get("id") or uuid.uuid4().hex[:12]
     out: dict[str, Any] = {}
@@ -102,6 +108,7 @@ def _client_record(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_sample_advisory() -> FetchedAdvisory:
+    """Bundled IIS RCE write-up so Load sample works offline."""
     markdown = SAMPLE_MD.read_text(encoding="utf-8")
     return FetchedAdvisory(
         url=SAMPLE_URL,
@@ -122,7 +129,10 @@ def run_pipeline(
     assets: list[str] | None = None,
     hunt_days: int = 90,
 ) -> Iterator[dict[str, Any]]:
-    """Yield SSE-friendly events, then a final `complete` or `error` event."""
+    """Yield SSE-friendly events, then a final `complete` or `error` event.
+
+    `assets` are catalog ids from the browser profile. `hunt_days` is 30, 60, or 90.
+    """
     try:
         yield _event("ingest", "Stage 1 — Ingestion & stealth retrieval.")
         if use_sample:
